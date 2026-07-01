@@ -1,0 +1,43 @@
+const http = require('http');
+
+function chunk(delta, finish = null) {
+  return { id: 'c1', object: 'chat.completion.chunk', created: 1, model: 'mock',
+    choices: [{ index: 0, delta, finish_reason: finish }] };
+}
+
+function toolCallChunk(name, args, id = 'call_1', index = 0) {
+  return chunk({ tool_calls: [{ index, id, type: 'function',
+    function: { name, arguments: JSON.stringify(args) } }] });
+}
+
+function textChunks(...texts) {
+  return [...texts.map(t => chunk({ content: t })), chunk({}, 'stop')];
+}
+
+// route(parsedRequestBody) -> array of chunk objects, or {status, body} for error responses
+function startServer(route) {
+  const server = http.createServer((req, res) => {
+    let raw = '';
+    req.on('data', d => raw += d);
+    req.on('end', () => {
+      const body = JSON.parse(raw);
+      server.requests.push(body);
+      const out = route(body);
+      if (out && !Array.isArray(out)) {
+        res.writeHead(out.status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(out.body ?? { error: { message: 'mock error' } }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      for (const p of out) res.write(`data: ${JSON.stringify(p)}\n\n`);
+      res.write('data: [DONE]\n\n');
+      res.end();
+    });
+  });
+  server.requests = [];
+  return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+const baseUrlOf = (server) => `http://127.0.0.1:${server.address().port}/v1`;
+
+module.exports = { chunk, toolCallChunk, textChunks, startServer, baseUrlOf };

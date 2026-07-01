@@ -7,7 +7,9 @@
     "dev:vite": "vite",
     "dev:electron": "wait-on http://localhost:5173 && tsc && electron dist/main/main.js",
     "dev": "concurrently \"npm run dev:vite\" \"npm run dev:electron\"",
-    "build": "vite build && tsc -p tsconfig.main.json && electron-builder"
+    "build": "vite build && tsc -p tsconfig.main.json && electron-builder",
+    "build:main": "tsc -p tsconfig.main.json",
+    "test": "npm run build:main && node --test test/*.test.js"
   },
   "keywords": [],
   "author": "",
