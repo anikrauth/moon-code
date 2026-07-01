@@ -4,6 +4,9 @@ import { FolderOpen, Terminal, FileEdit, Settings, Bot, X, Plus } from 'lucide-r
 import RichInput, { SkillItem, McpServer } from './RichInput';
 import SkillsPanel, { SkillEntry } from './SkillsPanel';
 import McpPanel, { McpServerEntry } from './McpPanel';
+import { StateProvider, Renderer } from '@json-render/react';
+import { registry } from './uiRegistry';
+import { parseAssistantContent } from './parseAssistantContent';
 
 interface ChatMessage {
   id: string;
@@ -313,7 +316,9 @@ export default function App() {
                 <p>Select a workspace and start chatting.</p>
             </div>
         ) : (
-            messages.map((msg, i) => (
+            messages.map((msg, i) => {
+                const spec = msg.role === 'assistant' ? parseAssistantContent(msg.content) : null;
+                return (
                 <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
                     <div style={{ 
                         background: msg.role === 'user' ? 'var(--accent-color)' : 'rgba(255,255,255,0.05)',
@@ -323,7 +328,11 @@ export default function App() {
                         maxWidth: '80%',
                         lineHeight: '1.5'
                     }}>
-                        {msg.content}
+                        {spec ? (
+                            <StateProvider initialState={{}}>
+                                <Renderer spec={spec} registry={registry} />
+                            </StateProvider>
+                        ) : msg.content}
                     </div>
                     
                     {/* Tool Calls */}
@@ -345,7 +354,8 @@ export default function App() {
                         </div>
                     ))}
                 </div>
-            ))
+                );
+            })
         )}
         {isTyping && (
             <div style={{ color: 'var(--text-secondary)', fontSize: '14px', padding: '10px' }}>
