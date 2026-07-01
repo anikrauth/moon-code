@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect, useRef } from 'react';
-import { FolderOpen, Terminal, FileEdit, Settings, Bot, X } from 'lucide-react';
+import { FolderOpen, Terminal, FileEdit, Settings, Bot, X, Plus } from 'lucide-react';
 import RichInput, { SkillItem, McpServer } from './RichInput';
 import SkillsPanel, { SkillEntry } from './SkillsPanel';
 import McpPanel, { McpServerEntry } from './McpPanel';
@@ -22,6 +22,7 @@ interface AppSettings {
 export default function App() {
   const [workspace, setWorkspace] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [history, setHistory] = useState<any[] | undefined>(undefined);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -75,16 +76,25 @@ export default function App() {
             newMsgs.push({ id: Date.now().toString(), role: 'assistant', content: `Error: ${event.content}` });
         } else if (event.type === 'done') {
             setIsTyping(false);
+            if (event.history) setHistory(event.history);
         }
         return newMsgs;
       });
     });
   }, []);
 
+  const startNewChat = () => {
+    setMessages([]);
+    setHistory(undefined);
+  };
+
   const selectWorkspace = async () => {
     if (!window.electron?.selectFolder) return;
     const path = await window.electron.selectFolder();
-    if (path) setWorkspace(path);
+    if (path) {
+      setWorkspace(path);
+      startNewChat();
+    }
   };
 
   const handleSend = () => {
@@ -95,7 +105,7 @@ export default function App() {
     setInput('');
     setIsTyping(true);
     
-    window.electron?.sendPrompt(input, workspace, settings);
+    window.electron?.sendPrompt(input, workspace, settings, history);
   };
 
   const handleSaveSettings = () => {
@@ -276,7 +286,16 @@ export default function App() {
             {workspace ? workspace.split('/').pop() : 'Select Workspace'}
             </button>
 
-            <button 
+            <button
+            onClick={startNewChat}
+            className="glass-panel"
+            style={{ display: 'flex', alignItems: 'center', padding: '8px 12px', color: 'var(--text-primary)', cursor: 'pointer' }}
+            title="New Chat"
+            >
+            <Plus size={16} />
+            </button>
+
+            <button
             onClick={() => setShowSettings(true)}
             className="glass-panel"
             style={{ display: 'flex', alignItems: 'center', padding: '8px 12px', color: 'var(--text-primary)', cursor: 'pointer' }}
