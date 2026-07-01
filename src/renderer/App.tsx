@@ -4,9 +4,46 @@ import { FolderOpen, Terminal, FileEdit, Settings, Bot, X, Plus } from 'lucide-r
 import RichInput, { SkillItem, McpServer } from './RichInput';
 import SkillsPanel, { SkillEntry } from './SkillsPanel';
 import McpPanel, { McpServerEntry } from './McpPanel';
-import { StateProvider, Renderer } from '@json-render/react';
+import { JSONUIProvider, Renderer } from '@json-render/react';
 import { registry } from './uiRegistry';
 import { parseAssistantContent } from './parseAssistantContent';
+
+/* Renderer throws on specs that pass validation but fail at render time;
+   without a boundary React unmounts the whole app. Fall back to raw text. */
+class SpecErrorBoundary extends React.Component<{ fallback: React.ReactNode; children: React.ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  render() {
+    return this.state.failed ? this.props.fallback : this.props.children;
+  }
+}
+
+/* While a response streams in, the accumulated JSONL is usually not yet a valid
+   spec — render the last spec that parsed instead of flashing raw JSON. */
+function AssistantContent({ content, streaming }: { content: string; streaming: boolean }) {
+  const lastGoodSpec = useRef<any>(null);
+  const spec = parseAssistantContent(content);
+  if (spec) lastGoodSpec.current = spec;
+  const displaySpec = spec ?? (streaming ? lastGoodSpec.current : null);
+
+  if (displaySpec) {
+    return (
+      <SpecErrorBoundary fallback={content}>
+        <JSONUIProvider
+          key={JSON.stringify(displaySpec.state ?? null)}
+          registry={registry}
+          initialState={displaySpec.state ?? {}}
+        >
+          <Renderer spec={displaySpec} registry={registry} />
+        </JSONUIProvider>
+      </SpecErrorBoundary>
+    );
+  }
+  if (streaming) return <span>&hellip;</span>;
+  return <>{content}</>;
+}
 
 interface ChatMessage {
   id: string;
@@ -30,8 +67,13 @@ export default function App() {
   const [isTyping, setIsTyping] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState<AppSettings>(() => {
-    const saved = localStorage.getItem('moon-agent-settings');
-    return saved ? JSON.parse(saved) : { provider: 'OpenAI', apiKey: '', model: 'gpt-4o', baseUrl: '' };
+    try {
+      const saved = localStorage.getItem('moon-agent-settings');
+      if (saved) return JSON.parse(saved);
+    } catch {
+      // corrupt saved settings — fall through to defaults
+    }
+    return { provider: 'OpenAI', apiKey: '', model: 'gpt-4o', baseUrl: '' };
   });
 
   /* ---- Skills state ---- */
@@ -39,6 +81,7 @@ export default function App() {
   const [showSkillsPanel, setShowSkillsPanel] = useState(false);
 
   /* ---- MCP state ---- */
+  const [permissionQueue, setPermissionQueue] = useState<any[]>([]);
   const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
   const [mcpStatuses, setMcpStatuses] = useState<Record<string, 'connected' | 'disconnected' | 'connecting'>>({});
   const [showMcpPanel, setShowMcpPanel] = useState(false);
@@ -53,33 +96,49 @@ export default function App() {
     // Listen for events from main process (only available inside Electron)
     if (!window.electron?.onAgentEvent) return;
     window.electron.onAgentEvent((event: any) => {
+      if (event.type === 'done') {
+        setIsTyping(false);
+        if (event.history) setHistory(event.history);
+        return;
+      }
+      if (event.type === 'permission_request') {
+        setPermissionQueue(prev => [...prev, event]);
+        return;
+      }
       setMessages(prev => {
         const newMsgs = [...prev];
-        const lastMsg = newMsgs[newMsgs.length - 1];
-        
+        const lastIdx = newMsgs.length - 1;
+        const lastMsg = newMsgs[lastIdx];
+
         if (event.type === 'message') {
             if (lastMsg && lastMsg.role === 'assistant') {
-                lastMsg.content += event.content;
+                newMsgs[lastIdx] = { ...lastMsg, content: lastMsg.content + event.content };
             } else {
                 newMsgs.push({ id: Date.now().toString(), role: 'assistant', content: event.content });
             }
         } else if (event.type === 'tool_call') {
             if (lastMsg && lastMsg.role === 'assistant') {
-                lastMsg.toolCalls = lastMsg.toolCalls || [];
-                lastMsg.toolCalls.push(event);
+                newMsgs[lastIdx] = { ...lastMsg, toolCalls: [...(lastMsg.toolCalls || []), event] };
             } else {
                 newMsgs.push({ id: Date.now().toString(), role: 'assistant', content: '', toolCalls: [event] });
             }
         } else if (event.type === 'tool_result') {
             if (lastMsg && lastMsg.toolCalls) {
-                const call = [...lastMsg.toolCalls].reverse().find((c: any) => c.name === event.name && !c.result);
-                if (call) call.result = event.result;
+                const callIdx = lastMsg.toolCalls.findIndex((c: any) => c.name === event.name && !c.result);
+                if (callIdx !== -1) {
+                    const toolCalls = [...lastMsg.toolCalls];
+                    toolCalls[callIdx] = { ...toolCalls[callIdx], result: event.result };
+                    newMsgs[lastIdx] = { ...lastMsg, toolCalls };
+                }
             }
         } else if (event.type === 'error') {
+            if (lastMsg && lastMsg.role === 'assistant' && lastMsg.toolCalls) {
+                newMsgs[lastIdx] = {
+                    ...lastMsg,
+                    toolCalls: lastMsg.toolCalls.map((c: any) => c.result ? c : { ...c, result: 'aborted' }),
+                };
+            }
             newMsgs.push({ id: Date.now().toString(), role: 'assistant', content: `Error: ${event.content}` });
-        } else if (event.type === 'done') {
-            setIsTyping(false);
-            if (event.history) setHistory(event.history);
         }
         return newMsgs;
       });
@@ -131,6 +190,7 @@ export default function App() {
 
   /* ---- MCP handlers ---- */
   const handleToggleMcp = (server: McpServerEntry) => {
+    if (mcpStatuses[server.id] === 'connecting') return;
     const isConnected = mcpServers.some((s) => s.id === server.id);
     if (isConnected) {
       setMcpServers((prev) => prev.filter((s) => s.id !== server.id));
@@ -143,11 +203,14 @@ export default function App() {
       // Simulate connection
       setMcpStatuses((prev) => ({ ...prev, [server.id]: 'connecting' }));
       setTimeout(() => {
-        setMcpServers((prev) => [
-          ...prev,
-          { id: server.id, name: server.name, status: 'connected', tools: server.tools },
-        ]);
-        setMcpStatuses((prev) => ({ ...prev, [server.id]: 'connected' }));
+        setMcpServers((prev) => {
+          if (prev.some((s) => s.id === server.id)) return prev;
+          return [...prev, { id: server.id, name: server.name, status: 'connected', tools: server.tools }];
+        });
+        setMcpStatuses((prev) => {
+          if (prev[server.id] !== 'connecting') return prev;
+          return { ...prev, [server.id]: 'connected' };
+        });
       }, 800);
     }
   };
@@ -159,6 +222,19 @@ export default function App() {
       delete next[id];
       return next;
     });
+  };
+
+  const respondPermission = (allow: boolean, alwaysAllow: boolean) => {
+    const req = permissionQueue[0];
+    if (!req) return;
+    window.electron?.respondPermission(req.id, allow, alwaysAllow);
+    setPermissionQueue(prev => prev.slice(1));
+  };
+
+  const permissionDetail = (req: any) => {
+    if (req.name === 'run_command') return req.arguments?.command;
+    if (req.name === 'edit_file') return `${req.arguments?.filePath}\n--- remove\n${req.arguments?.oldString}\n+++ add\n${req.arguments?.newString}`;
+    return req.arguments?.filePath ?? JSON.stringify(req.arguments);
   };
 
   const providerOptions = [
@@ -253,6 +329,59 @@ export default function App() {
         </div>
       )}
 
+      {/* Permission Request Modal */}
+      {permissionQueue.length > 0 && (
+        <div className="modal-overlay">
+          <div className="glass-panel modal-content">
+            <h3 style={{ margin: 0 }}>Permission required</h3>
+            <p style={{ margin: '8px 0', color: 'var(--text-secondary)' }}>
+              The agent wants to run <strong>{permissionQueue[0].name}</strong>:
+            </p>
+            <pre style={{
+              background: 'rgba(0,0,0,0.4)',
+              padding: '10px',
+              borderRadius: '8px',
+              maxHeight: '200px',
+              overflow: 'auto',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-all',
+              fontSize: '12px',
+              margin: 0
+            }}>{permissionDetail(permissionQueue[0])}</pre>
+            <div style={{ display: 'flex', gap: '10px', marginTop: '14px', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => respondPermission(false, false)}
+                className="glass-panel"
+                style={{ padding: '8px 14px', cursor: 'pointer', color: 'var(--text-primary)' }}
+              >
+                Deny
+              </button>
+              <button
+                onClick={() => respondPermission(true, false)}
+                className="glass-panel"
+                style={{ padding: '8px 14px', cursor: 'pointer', color: 'var(--text-primary)' }}
+              >
+                Allow once
+              </button>
+              <button
+                onClick={() => respondPermission(true, true)}
+                style={{
+                  padding: '8px 14px',
+                  cursor: 'pointer',
+                  background: 'var(--accent-color)',
+                  color: '#000',
+                  border: 'none',
+                  borderRadius: '8px',
+                  fontWeight: 600
+                }}
+              >
+                Always allow ({permissionQueue[0].name})
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Skills Panel */}
       <SkillsPanel
         open={showSkillsPanel}
@@ -317,10 +446,9 @@ export default function App() {
             </div>
         ) : (
             messages.map((msg, i) => {
-                const spec = msg.role === 'assistant' ? parseAssistantContent(msg.content) : null;
                 return (
                 <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
-                    <div style={{ 
+                    <div style={{
                         background: msg.role === 'user' ? 'var(--accent-color)' : 'rgba(255,255,255,0.05)',
                         color: msg.role === 'user' ? '#000' : 'var(--text-primary)',
                         padding: '12px 16px',
@@ -328,10 +456,8 @@ export default function App() {
                         maxWidth: '80%',
                         lineHeight: '1.5'
                     }}>
-                        {spec ? (
-                            <StateProvider initialState={{}}>
-                                <Renderer spec={spec} registry={registry} />
-                            </StateProvider>
+                        {msg.role === 'assistant' ? (
+                            <AssistantContent content={msg.content} streaming={isTyping && i === messages.length - 1} />
                         ) : msg.content}
                     </div>
                     

@@ -43,11 +43,36 @@ app.whenReady().then(() => {
     }
   });
 
+  // Tools the user approved with "always allow" for the rest of this app session.
+  const sessionAllowedTools = new Set<string>();
+  const pendingPermissions = new Map<string, (allow: boolean, alwaysAllow: boolean) => void>();
+  let permissionCounter = 0;
+
   ipcMain.on('agent:prompt', (event, prompt: string, workspace: string, settings: any, history: any) => {
+    const requestPermission = (name: string, args: any): Promise<boolean> => {
+      if (sessionAllowedTools.has(name)) return Promise.resolve(true);
+      const id = `perm-${++permissionCounter}`;
+      return new Promise((resolve) => {
+        pendingPermissions.set(id, (allow, alwaysAllow) => {
+          if (allow && alwaysAllow) sessionAllowedTools.add(name);
+          resolve(allow);
+        });
+        event.reply('agent:event', { type: 'permission_request', id, name, arguments: args });
+      });
+    };
+
     // Call the agent loop and stream results back
     handlePrompt(prompt, workspace, settings, history, (agentEvent) => {
       event.reply('agent:event', agentEvent);
-    });
+    }, requestPermission);
+  });
+
+  ipcMain.on('agent:permission-response', (_event, id: string, allow: boolean, alwaysAllow: boolean) => {
+    const resolver = pendingPermissions.get(id);
+    if (resolver) {
+      pendingPermissions.delete(id);
+      resolver(allow, alwaysAllow);
+    }
   });
 
   app.on('activate', function () {
