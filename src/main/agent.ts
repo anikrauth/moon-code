@@ -117,7 +117,11 @@ export async function handlePrompt(prompt: string, workspace: string, settings: 
 
         let newHistory = [...(history ?? []), userMsg, ...responseMessages];
         if (newHistory.length > MAX_HISTORY) {
-            newHistory = newHistory.slice(-MAX_HISTORY);
+            let cutIndex = newHistory.length - MAX_HISTORY;
+            while (cutIndex < newHistory.length && newHistory[cutIndex].role === 'tool') {
+                cutIndex++;
+            }
+            newHistory = newHistory.slice(cutIndex);
         }
 
         onEvent({ type: 'message', content: text });
