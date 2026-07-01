@@ -14,7 +14,9 @@ const execAsync = promisify(exec);
 import * as dotenv from 'dotenv';
 dotenv.config();
 
-export async function handlePrompt(prompt: string, workspace: string, settings: any, onEvent: (event: any) => void) {
+const MAX_HISTORY = 20;
+
+export async function handlePrompt(prompt: string, workspace: string, settings: any, history: any[] | undefined, onEvent: (event: any) => void) {
     try {
         const tools = {
             run_command: tool({
@@ -104,16 +106,22 @@ export async function handlePrompt(prompt: string, workspace: string, settings: 
             baseURL: settings.baseUrl || undefined,
         });
 
-        const { text } = await generateText({
+        const userMsg = { role: 'user', content: prompt };
+        const { text, responseMessages } = await generateText({
             model: customOpenAI.chat(settings.model || 'gpt-4o'),
             system: `You are Moon Agent, an advanced coding agentic IDE for Mac. You have full access to the user's workspace at ${workspace}. You must use tools to accomplish the user's requests autonomously. Do NOT wait for the user if you can figure it out. Answer concisely.`,
-            prompt: prompt,
+            messages: [...(history ?? []), userMsg],
             tools: tools,
             stopWhen: stepCountIs(10),
         });
 
+        let newHistory = [...(history ?? []), userMsg, ...responseMessages];
+        if (newHistory.length > MAX_HISTORY) {
+            newHistory = newHistory.slice(-MAX_HISTORY);
+        }
+
         onEvent({ type: 'message', content: text });
-        onEvent({ type: 'done' });
+        onEvent({ type: 'done', history: newHistory });
     } catch (error: any) {
         onEvent({ type: 'error', content: error.message });
         onEvent({ type: 'done' });
