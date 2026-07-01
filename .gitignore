@@ -5,3 +5,4 @@ graphify-out/
 .env
 .env.local
 *.log
+.superpowers/
