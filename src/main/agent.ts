@@ -14,6 +14,8 @@ const execAsync = promisify(exec);
 import * as dotenv from 'dotenv';
 dotenv.config();
 
+import { catalog } from '../shared/uiCatalog';
+
 const MAX_HISTORY = 20;
 
 export async function handlePrompt(prompt: string, workspace: string, settings: any, history: any[] | undefined, onEvent: (event: any) => void) {
@@ -106,10 +108,24 @@ export async function handlePrompt(prompt: string, workspace: string, settings: 
             baseURL: settings.baseUrl || undefined,
         });
 
+        const systemPrompt = `You are Moon Agent, an advanced coding agentic IDE for Mac. You have full access to the user's workspace at ${workspace}. You must use tools to accomplish the user's requests autonomously. Do NOT wait for the user if you can figure it out. Answer concisely.
+
+${catalog.prompt({
+            system: 'Your final answer to the user must be valid UI spec JSONL (SpecStream format), not plain prose.',
+            customRules: [
+                'Always wrap your entire response in a single root Stack element, even for a one-sentence answer.',
+                'Use Table for any tabular or file-listing data instead of describing it in prose.',
+                'Use CodeBlock for command output, code snippets, or file contents.',
+                'Use List for enumerated points or suggestions.',
+                'Use Text for everything else.',
+            ],
+            mode: 'standalone',
+        })}`;
+
         const userMsg = { role: 'user', content: prompt };
         const { text, responseMessages } = await generateText({
             model: customOpenAI.chat(settings.model || 'gpt-4o'),
-            system: `You are Moon Agent, an advanced coding agentic IDE for Mac. You have full access to the user's workspace at ${workspace}. You must use tools to accomplish the user's requests autonomously. Do NOT wait for the user if you can figure it out. Answer concisely.`,
+            system: systemPrompt,
             messages: [...(history ?? []), userMsg],
             tools: tools,
             stopWhen: stepCountIs(10),
