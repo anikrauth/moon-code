@@ -1,0 +1,658 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+
+:root {
+  --bg-color: #0d0d0d;
+  --panel-bg: rgba(25, 25, 25, 0.6);
+  --border-color: rgba(255, 255, 255, 0.1);
+  --text-primary: #f1f1f1;
+  --text-secondary: #a1a1a1;
+  --accent-color: #cb8b5c;
+  --accent-hover: #e09f70;
+  --accent-subtle: rgba(203, 139, 92, 0.12);
+  --surface-hover: rgba(255, 255, 255, 0.06);
+  --surface-active: rgba(255, 255, 255, 0.1);
+  --success-color: #34d399;
+  --warning-color: #f59e0b;
+  --danger-color: #ef4444;
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  background-color: var(--bg-color);
+  color: var(--text-primary);
+  height: 100vh;
+  overflow: hidden;
+  /* Make the window draggable by its background */
+  -webkit-app-region: drag; 
+}
+
+/* Ensure interactive elements aren't dragged */
+button, input, select, textarea, .chat-container, .rich-input-container {
+  -webkit-app-region: no-drag;
+}
+
+#root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.glass-panel {
+  background: var(--panel-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+}
+
+/* Scrollbar styles */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+
+.markdown-body pre {
+  background: rgba(0,0,0,0.5);
+  padding: 10px;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.modal-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal-content {
+  width: 400px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.modal-content input, .modal-content select {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: rgba(0,0,0,0.4);
+  color: var(--text-primary);
+  font-size: 14px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.modal-content input:focus, .modal-content select:focus {
+  border-color: var(--accent-color);
+}
+
+.modal-content label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+  display: block;
+}
+
+
+/* ================================================================== */
+/*  RICH INPUT (Claude-style multi-line input with toolbar + chips)    */
+/* ================================================================== */
+
+.rich-input-container {
+  background: rgba(25, 25, 25, 0.7);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.rich-input-focused {
+  border-color: rgba(203, 139, 92, 0.4);
+  box-shadow: 0 0 0 3px rgba(203, 139, 92, 0.08), 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.rich-input-disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* ---- Chips row ---- */
+.rich-input-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 14px 0;
+}
+
+.ri-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px 3px 6px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  animation: chipIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes chipIn {
+  from { opacity: 0; transform: scale(0.9) translateY(4px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.ri-chip-skill {
+  background: rgba(203, 139, 92, 0.15);
+  color: var(--accent-color);
+  border: 1px solid rgba(203, 139, 92, 0.25);
+}
+
+.ri-chip-mcp {
+  background: rgba(52, 211, 153, 0.12);
+  color: var(--success-color);
+  border: 1px solid rgba(52, 211, 153, 0.2);
+}
+
+.ri-chip-label {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ri-chip-meta {
+  font-size: 10px;
+  opacity: 0.7;
+  padding-left: 2px;
+}
+
+.ri-chip-remove {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.ri-chip-remove:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* ---- Textarea ---- */
+.rich-input-textarea {
+  all: unset;
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 14px 16px 6px;
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  resize: none;
+  min-height: 24px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.rich-input-textarea::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.7;
+}
+
+/* ---- Bottom toolbar ---- */
+.rich-input-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.ri-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.ri-toolbar-btn {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.ri-toolbar-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.ri-toolbar-btn:active {
+  background: var(--surface-active);
+  transform: scale(0.97);
+}
+
+.ri-toolbar-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ri-toolbar-btn-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ri-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--accent-color);
+  color: #000;
+  line-height: 1;
+}
+
+/* ---- Send button ---- */
+.ri-send-btn {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
+  cursor: not-allowed;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.ri-send-active {
+  background: var(--accent-color);
+  color: #000;
+  cursor: pointer;
+}
+
+.ri-send-active:hover {
+  background: var(--accent-hover);
+  transform: scale(1.05);
+}
+
+.ri-send-active:active {
+  transform: scale(0.95);
+}
+
+
+/* ================================================================== */
+/*  SKILLS PANEL                                                       */
+/* ================================================================== */
+
+.skills-panel,
+.mcp-panel {
+  width: 460px;
+  max-height: 520px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 16px;
+  animation: panelIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes panelIn {
+  from { opacity: 0; transform: translateY(12px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.sp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.sp-header-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sp-header-title h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.sp-close {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.sp-close:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+/* ---- Search ---- */
+.sp-search-wrap {
+  position: relative;
+  padding: 10px 14px;
+}
+
+.sp-search-icon {
+  position: absolute;
+  left: 24px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-secondary);
+  pointer-events: none;
+}
+
+.sp-search {
+  all: unset;
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px 8px 30px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--text-primary);
+  font-size: 13px;
+  transition: border-color 0.15s;
+}
+
+.sp-search:focus {
+  border-color: rgba(203, 139, 92, 0.4);
+}
+
+.sp-search::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.6;
+}
+
+/* ---- Catalog list ---- */
+.sp-catalog {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 10px 14px;
+}
+
+.sp-category {
+  margin-bottom: 8px;
+}
+
+.sp-category-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  padding: 8px 8px 4px;
+  opacity: 0.7;
+}
+
+.sp-skill-row {
+  all: unset;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.sp-skill-row:hover {
+  background: var(--surface-hover);
+}
+
+.sp-skill-active {
+  background: var(--accent-subtle);
+}
+
+.sp-skill-active:hover {
+  background: rgba(203, 139, 92, 0.18);
+}
+
+.sp-skill-info {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.sp-skill-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--accent-color);
+}
+
+.sp-skill-name {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+
+.sp-skill-desc {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  margin-top: 1px;
+}
+
+.sp-skill-toggle {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  transition: color 0.15s, background 0.15s;
+}
+
+.sp-skill-active .sp-skill-toggle {
+  color: var(--accent-color);
+  background: rgba(203, 139, 92, 0.15);
+}
+
+.sp-empty {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+
+/* ================================================================== */
+/*  MCP PANEL                                                          */
+/* ================================================================== */
+
+.mcp-server-row {
+  all: unset;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.mcp-server-row:hover {
+  background: var(--surface-hover);
+}
+
+.mcp-server-active {
+  background: rgba(52, 211, 153, 0.06);
+}
+
+.mcp-server-active:hover {
+  background: rgba(52, 211, 153, 0.1);
+}
+
+.mcp-server-info {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.mcp-server-icon-wrap {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
+}
+
+.mcp-server-active .mcp-server-icon-wrap {
+  background: rgba(52, 211, 153, 0.12);
+  color: var(--success-color);
+}
+
+.mcp-server-text {
+  min-width: 0;
+  flex: 1;
+}
+
+.mcp-server-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mcp-server-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.mcp-server-meta {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.mcp-meta-tag {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.mcp-toggle-btn {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 12px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+  transition: background 0.15s, color 0.15s;
+}
+
+.mcp-server-row:hover .mcp-toggle-btn {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.mcp-toggle-disconnect {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--danger-color);
+}
+
+.mcp-server-row:hover .mcp-toggle-disconnect {
+  background: rgba(239, 68, 68, 0.2);
+}
+
+/* Status indicators */
+.mcp-status-connected {
+  color: var(--success-color);
+}
+
+.mcp-status-connecting {
+  color: var(--warning-color);
+  animation: spin 1s linear infinite;
+}
+
+.mcp-status-disconnected {
+  color: var(--text-secondary);
+  opacity: 0.4;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
