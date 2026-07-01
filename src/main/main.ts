@@ -43,9 +43,9 @@ app.whenReady().then(() => {
     }
   });
 
-  ipcMain.on('agent:prompt', (event, prompt: string, workspace: string, settings: any) => {
+  ipcMain.on('agent:prompt', (event, prompt: string, workspace: string, settings: any, history: any) => {
     // Call the agent loop and stream results back
-    handlePrompt(prompt, workspace, settings, (agentEvent) => {
+    handlePrompt(prompt, workspace, settings, history, (agentEvent) => {
       event.reply('agent:event', agentEvent);
     });
   });
