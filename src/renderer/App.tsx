@@ -167,21 +167,29 @@ export default function App() {
         if (!window.electron?.getConfig) return;
         let c = await window.electron.getConfig();
         if (c.profiles.length === 0) {
-            try {
-                const saved = localStorage.getItem('moon-agent-settings');
-                if (saved) {
-                    const old = JSON.parse(saved);
-                    if (old.apiKey) {
+            const saved = localStorage.getItem('moon-agent-settings');
+            if (saved) {
+                let old: any = null;
+                try {
+                    old = JSON.parse(saved);
+                } catch {
+                    // unparseable legacy settings — drop them
+                    localStorage.removeItem('moon-agent-settings');
+                }
+                if (old && old.apiKey) {
+                    try {
                         c = await window.electron.upsertProfile(
                             { name: 'Default', provider: old.provider || 'OpenAI', model: old.model || 'gpt-4o', baseUrl: old.baseUrl || '' },
                             old.apiKey
                         );
+                        // Only drop the legacy copy once the migrated profile is durably
+                        // confirmed to have a key on the main-side config; otherwise a
+                        // silent persist failure would discard the user's only API key.
+                        if (c.profiles.some((p: any) => p.hasKey)) localStorage.removeItem('moon-agent-settings');
+                    } catch {
+                        // IPC call rejected — keep the legacy entry so the next launch retries
                     }
-                    localStorage.removeItem('moon-agent-settings');
                 }
-            } catch {
-                // unparseable legacy settings — drop them
-                localStorage.removeItem('moon-agent-settings');
             }
         }
         applyConfig(c);
