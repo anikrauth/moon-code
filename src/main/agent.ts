@@ -338,7 +338,7 @@ ${spawnState.projectMemory ? `\nPROJECT INSTRUCTIONS (from MOON.md in the worksp
                     try {
                         res = await def.execute(args);
                     } catch (e) {
-                        res = `Error: ${e.message}`;
+                        res = `Error: ${e?.message ?? String(e)}`;
                     }
                     const out = truncateOutput(typeof res === 'string' ? res : JSON.stringify(res));
                     emit({ type: 'tool_result', name, result: out });

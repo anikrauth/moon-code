@@ -111,3 +111,38 @@ test('unknown server id -> error, forget clears status', { timeout: 15000 }, asy
   mgr.forget('nope');
   assert.strictEqual(mgr.statuses().nope, undefined);
 });
+
+test('disconnect during in-flight connect cancels: no ghost connection', { timeout: 30000 }, async (t) => {
+  const statuses = [];
+  const mgr = mkManager({
+    fx: { id: 'fx', name: 'Fixture Srv', transport: 'stdio', command: process.execPath, args: [FIXTURE], hasSecrets: false },
+  }, statuses);
+  t.after(() => mgr.disconnectAll());
+
+  const connectPromise = mgr.connect('fx');
+  await mgr.disconnect('fx');
+  const ok = await connectPromise;
+
+  assert.strictEqual(ok, false);
+  assert.strictEqual(mgr.statuses().fx.status, 'disconnected');
+  assert.deepStrictEqual(mgr.getAgentTools(), {});
+});
+
+test('slug collision disambiguates later server instead of overwriting tool names', { timeout: 30000 }, async (t) => {
+  const statuses = [];
+  const mgr = mkManager({
+    fx1: { id: 'fx1', name: 'Fixture Srv', transport: 'stdio', command: process.execPath, args: [FIXTURE], hasSecrets: false },
+    fx2: { id: 'fx2', name: 'Fixture-Srv', transport: 'stdio', command: process.execPath, args: [FIXTURE], hasSecrets: false },
+  }, statuses);
+  t.after(() => mgr.disconnectAll());
+
+  assert.strictEqual(await mgr.connect('fx1'), true);
+  assert.strictEqual(await mgr.connect('fx2'), true);
+
+  const tools = mgr.getAgentTools();
+  const names = Object.keys(tools);
+  assert.strictEqual(names.length, 6);
+  assert.strictEqual(new Set(names).size, 6, 'no name appears twice');
+  assert.ok(names.some((n) => n.startsWith('mcp__Fixture_Srv__')));
+  assert.ok(names.some((n) => n.startsWith('mcp__Fixture_Srv_') && !n.startsWith('mcp__Fixture_Srv__')));
+});

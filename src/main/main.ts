@@ -67,8 +67,14 @@ app.whenReady().then(() => {
   const mcpListShape = () => ({ servers: configStore.getRedacted().mcpServers, statuses: mcpManager.statuses() });
 
   ipcMain.handle('mcp:list', () => mcpListShape());
-  ipcMain.handle('mcp:upsertServer', (_e, def, rawSecrets) => {
-      try { configStore.upsertMcpServer(def, rawSecrets); } catch (e) { console.error('[mcp]', e); }
+  ipcMain.handle('mcp:upsertServer', async (_e, def, rawSecrets) => {
+      try {
+          const currentStatus = mcpManager.statuses()[def?.id]?.status;
+          if (def?.id && (currentStatus === 'connected' || currentStatus === 'connecting')) {
+              await mcpManager.disconnect(def.id);
+          }
+          configStore.upsertMcpServer(def, rawSecrets);
+      } catch (e) { console.error('[mcp]', e); }
       return mcpListShape();
   });
   ipcMain.handle('mcp:deleteServer', async (_e, id) => {
@@ -76,16 +82,20 @@ app.whenReady().then(() => {
       return mcpListShape();
   });
   ipcMain.handle('mcp:connect', async (_e, id) => {
-      const ok = await mcpManager.connect(id);
-      if (ok) {
-          const ids = new Set(configStore.getConfig().connectedMcpIds); ids.add(id);
-          configStore.setMcpIds([...ids]);
-      }
+      try {
+          const ok = await mcpManager.connect(id);
+          if (ok) {
+              const ids = new Set(configStore.getConfig().connectedMcpIds); ids.add(id);
+              configStore.setMcpIds([...ids]);
+          }
+      } catch (e) { console.error('[mcp]', e); }
       return mcpListShape();
   });
   ipcMain.handle('mcp:disconnect', async (_e, id) => {
-      await mcpManager.disconnect(id);
-      configStore.setMcpIds(configStore.getConfig().connectedMcpIds.filter((x) => x !== id));
+      try {
+          await mcpManager.disconnect(id);
+          configStore.setMcpIds(configStore.getConfig().connectedMcpIds.filter((x) => x !== id));
+      } catch (e) { console.error('[mcp]', e); }
       return mcpListShape();
   });
 

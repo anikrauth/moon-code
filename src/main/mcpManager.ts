@@ -3,6 +3,7 @@
 export function createMcpManager({ getServer, resolveSecrets, onStatus }) {
     const connections = new Map(); // id -> { client, tools, serverName }
     const pending = new Map(); // id -> in-flight connect promise
+    const cancelRequested = new Set();
     const statusMap = {};
 
     const emit = (id, status, extra = {}) => {
@@ -20,6 +21,7 @@ export function createMcpManager({ getServer, resolveSecrets, onStatus }) {
     }
 
     async function doConnect(id) {
+        cancelRequested.delete(id);
         const def = getServer(id);
         if (!def) { emit(id, 'error', { message: 'Unknown server' }); return false; }
         if (connections.has(id)) return true;
@@ -51,17 +53,23 @@ export function createMcpManager({ getServer, resolveSecrets, onStatus }) {
             };
             await client.connect(transport);
             const { tools } = await client.listTools();
+            if (cancelRequested.delete(id)) {
+                try { await client.close(); } catch { /* already dead */ }
+                emit(id, 'disconnected');
+                return false;
+            }
             connections.set(id, { client, tools, serverName: def.name });
             emit(id, 'connected', { toolCount: tools.length });
             return true;
         } catch (e) {
             connections.delete(id);
-            emit(id, 'error', { message: e.message });
+            emit(id, 'error', { message: e?.message ?? String(e) });
             return false;
         }
     }
 
     async function disconnect(id) {
+        if (pending.has(id)) cancelRequested.add(id);
         const conn = connections.get(id);
         if (!conn) return;
         connections.delete(id);
@@ -81,10 +89,15 @@ export function createMcpManager({ getServer, resolveSecrets, onStatus }) {
         statuses: () => ({ ...statusMap }),
         getAgentTools() {
             const out = {};
-            for (const conn of connections.values()) {
+            for (const [id, conn] of connections) {
                 for (const t of conn.tools) {
-                    const name = `mcp__${slug(conn.serverName)}__${t.name}`;
-                    if (out[name]) console.warn(`[mcp] tool name collision: ${name}`);
+                    let name = `mcp__${slug(conn.serverName)}__${t.name}`;
+                    if (out[name]) {
+                        const idFragment = String(id).replace(/[^a-zA-Z0-9]+/g, '_').slice(-4);
+                        const disambiguated = `mcp__${slug(conn.serverName)}_${idFragment}__${t.name}`;
+                        console.warn(`[mcp] tool name collision: ${name} -> disambiguated as ${disambiguated}`);
+                        name = disambiguated;
+                    }
                     out[name] = {
                         description: t.description ?? `${t.name} (from ${conn.serverName})`,
                         inputSchema: t.inputSchema ?? { type: 'object', properties: {} },
