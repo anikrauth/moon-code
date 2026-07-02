@@ -51,7 +51,7 @@ function ToolActivity({ tool }: { tool: any }) {
   let preview = '';
   try {
     const args = JSON.parse(tool.arguments ?? '{}');
-    preview = args.command ?? args.filePath ?? args.dirPath ?? args.task ?? '';
+    preview = args.command ?? args.filePath ?? args.dirPath ?? args.task ?? args.pattern ?? '';
   } catch {
     // unparseable arguments — show no preview
   }

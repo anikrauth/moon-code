@@ -101,3 +101,37 @@ test('grepSearch trims long lines and caps matches', (t) => {
   assert.strictEqual(matchLines.length, 200);
   assert.match(out, /\[\.\.\. additional matches truncated\]$/);
 });
+
+const { startServer, textChunks, toolCallChunk, chunk, baseUrlOf } = require('./helpers/fake-openai');
+const { handlePrompt } = require('../dist/main/agent.js');
+
+async function runTool(t, workspace, call, permCalls) {
+  const server = await startServer((body) =>
+    body.messages.some((m) => m.role === 'tool')
+      ? textChunks('done')
+      : [toolCallChunk(call.name, call.args), chunk({}, 'tool_calls')]);
+  t.after(() => server.close());
+  const events = [];
+  await new Promise((resolve) => {
+    handlePrompt('go', workspace, { apiKey: 'k', baseUrl: baseUrlOf(server), model: 'mock' }, undefined,
+      (e) => { events.push(e); if (e.type === 'done') resolve(); },
+      async (name) => { permCalls.push(name); return true; });
+  });
+  return events.find((e) => e.type === 'tool_result' && e.name === call.name).result;
+}
+
+test('glob_search tool: end-to-end, no permission prompt', async (t) => {
+  const ws = fixture(t, { 'src/target.ts': '', 'other.md': '' });
+  const permCalls = [];
+  const result = await runTool(t, ws, { name: 'glob_search', args: { pattern: '**/*.ts' } }, permCalls);
+  assert.strictEqual(result, 'src/target.ts');
+  assert.deepStrictEqual(permCalls, []);
+});
+
+test('grep_search tool: end-to-end, no permission prompt', async (t) => {
+  const ws = fixture(t, { 'src/app.ts': 'const needle = 42;\n' });
+  const permCalls = [];
+  const result = await runTool(t, ws, { name: 'grep_search', args: { pattern: 'needle' } }, permCalls);
+  assert.strictEqual(result, 'src/app.ts:1: const needle = 42;');
+  assert.deepStrictEqual(permCalls, []);
+});

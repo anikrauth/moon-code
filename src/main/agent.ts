@@ -15,6 +15,7 @@ import * as dotenv from 'dotenv';
 dotenv.config();
 
 import { catalog } from '../shared/uiCatalog';
+import { globSearch, grepSearch } from './searchTools';
 
 const MAX_HISTORY = 20;
 const KEEP_RECENT = 8;
@@ -262,6 +263,38 @@ function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpaw
                     return errMsg;
                 }
             }
+        }),
+        glob_search: tool({
+            description: 'Find files by glob pattern (e.g. "src/**/*.ts") matched against workspace-relative paths, newest first. Prefer this over run_command with find.',
+            inputSchema: z.object({
+                pattern: z.string().describe('Glob pattern. Supports **, *, and ?.'),
+            }),
+            execute: async ({ pattern }) => {
+                emit({ type: 'tool_call', name: 'glob_search', arguments: JSON.stringify({ pattern }) });
+                const res = globSearch({ workspace, pattern });
+                emit({ type: 'tool_result', name: 'glob_search', result: res });
+                return res;
+            }
+        }),
+        grep_search: tool({
+            description: 'Search file contents with a regular expression. Returns matches as "path:line: text". Prefer this over run_command with grep.',
+            inputSchema: z.object({
+                pattern: z.string().describe('Regular expression to search for. Case-insensitive unless caseSensitive is true.'),
+                path: z.string().nullable().optional().describe('Directory to search, relative to workspace. Default ".".'),
+                filePattern: z.string().nullable().optional().describe('Glob filter for file paths, e.g. "**/*.ts".'),
+                caseSensitive: z.boolean().nullable().optional().describe('Match case exactly. Default false.'),
+            }),
+            execute: async ({ pattern, path: searchPath, filePattern, caseSensitive }) => {
+                emit({ type: 'tool_call', name: 'grep_search', arguments: JSON.stringify({ pattern, path: searchPath, filePattern }) });
+                const res = grepSearch({
+                    workspace, pattern,
+                    path: searchPath ?? undefined,
+                    filePattern: filePattern ?? undefined,
+                    caseSensitive: !!caseSensitive,
+                });
+                emit({ type: 'tool_result', name: 'grep_search', result: res });
+                return res;
+            }
         })
     };
     if (includeSpawn) {
@@ -336,7 +369,7 @@ export async function handlePrompt(
 
         const projectMemory = await loadProjectMemory(workspace);
 
-        const systemPrompt = `You are Moon Agent, an advanced coding agentic IDE for Mac. You have full access to the user's workspace at ${workspace}. You must use tools to accomplish the user's requests autonomously. Do NOT wait for the user if you can figure it out. Answer concisely.
+        const systemPrompt = `You are Moon Agent, an advanced coding agentic IDE for Mac. You have full access to the user's workspace at ${workspace}. You must use tools to accomplish the user's requests autonomously. Do NOT wait for the user if you can figure it out. Answer concisely. Use grep_search and glob_search to find code instead of running grep or find through run_command.
 ${projectMemory ? `\nPROJECT INSTRUCTIONS (from ${MEMORY_FILE} in the workspace root — follow these):\n${projectMemory}\n` : ''}
 ${catalog.prompt({
             system: 'Your final answer to the user must be valid UI spec JSONL (SpecStream format), not plain prose.',
