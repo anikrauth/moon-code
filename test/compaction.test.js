@@ -15,12 +15,15 @@ function run(server, history) {
   });
 }
 
-test('history over MAX_HISTORY is summarized into one message', async () => {
+test('history over MAX_HISTORY is summarized into one message', async (t) => {
   const server = await startServer((body) =>
     body.tools ? textChunks('answer') : textChunks('THE-SUMMARY'));
+  t.after(() => server.close());
   const events = await run(server, longHistory());
 
   assert.ok(events.some(e => e.type === 'status' && /Compacting/.test(e.content)));
+  const statusEvents = events.filter(e => e.type === 'status');
+  assert.strictEqual(statusEvents[statusEvents.length - 1].content, null);
   const summarizeReq = server.requests.find(b => !b.tools);
   assert.ok(summarizeReq, 'summarize call was made');
   const mainReq = server.requests.find(b => b.tools);
@@ -31,17 +34,18 @@ test('history over MAX_HISTORY is summarized into one message', async () => {
   const done = events.find(e => e.type === 'done');
   assert.match(done.history[0].content, /^\[Earlier conversation summary\]/);
   assert.strictEqual(done.history.length, 11); // summary + 8 recent + user + assistant
-  server.close();
 });
 
-test('summarize failure falls back to slice, turn still completes', async () => {
+test('summarize failure falls back to slice, turn still completes', async (t) => {
   const server = await startServer((body) =>
     body.tools ? textChunks('answer') : { status: 400 });
+  t.after(() => server.close());
   const events = await run(server, longHistory());
   const done = events.find(e => e.type === 'done');
   assert.ok(done.history.length > 0);
   assert.strictEqual(events.filter(e => e.type === 'error').length, 0);
+  const statusEvents = events.filter(e => e.type === 'status');
+  assert.strictEqual(statusEvents[statusEvents.length - 1].content, null);
   const mainReq = server.requests.find(b => b.tools);
   assert.strictEqual(mainReq.messages.filter(m => m.role !== 'system').length, 21); // sliced 20 + new prompt
-  server.close();
 });

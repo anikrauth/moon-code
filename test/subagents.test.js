@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const { startServer, textChunks, toolCallChunk, chunk, baseUrlOf } = require('./helpers/fake-openai');
 const { handlePrompt } = require('../dist/main/agent.js');
 
-test('parallel subagents: gated, tagged, no recursion, results returned', { timeout: 10000 }, async () => {
+test('parallel subagents: gated, tagged, no recursion, results returned', { timeout: 10000 }, async (t) => {
   const server = await startServer((body) => {
     const isMain = (body.tools ?? []).some(t => t.function.name === 'spawn_agent');
     const hasToolMsg = body.messages.some(m => m.role === 'tool');
@@ -18,6 +18,7 @@ test('parallel subagents: gated, tagged, no recursion, results returned', { time
     if (!hasToolMsg) return [toolCallChunk('run_command', { command: 'true' }), chunk({}, 'tool_calls')];
     return textChunks('sub findings');
   });
+  t.after(() => server.close());
 
   // Permission stub resolves only after BOTH subagents have asked.
   // If spawns ran serially, the second request never arrives -> test times out. This proves parallelism.
@@ -49,10 +50,9 @@ test('parallel subagents: gated, tagged, no recursion, results returned', { time
   const subReqs = server.requests.filter(b => !(b.tools ?? []).some(t => t.function.name === 'spawn_agent'));
   assert.ok(subReqs.length >= 2);
   assert.deepStrictEqual(events.filter(e => e.type === 'message').map(e => e.agent), Array(events.filter(e => e.type === 'message').length).fill('main'));
-  server.close();
 });
 
-test('subagent failure is contained as error tool result', async () => {
+test('subagent failure is contained as error tool result', async (t) => {
   const server = await startServer((body) => {
     const isMain = (body.tools ?? []).some(t => t.function.name === 'spawn_agent');
     const hasToolMsg = body.messages.some(m => m.role === 'tool');
@@ -60,6 +60,7 @@ test('subagent failure is contained as error tool result', async () => {
     if (isMain) return textChunks('recovered');
     return { status: 400 }; // subagent model call fails
   });
+  t.after(() => server.close());
   const events = [];
   await new Promise((resolve) => {
     handlePrompt('go', process.cwd(), { apiKey: 'k', baseUrl: baseUrlOf(server), model: 'mock' }, undefined,
@@ -69,5 +70,4 @@ test('subagent failure is contained as error tool result', async () => {
   assert.match(r.result, /^Error: /);
   assert.strictEqual(r.agent, 'main'); // error tool_result carries the PARENT agent id
   assert.strictEqual(events.filter(e => e.type === 'error').length, 0); // parent turn survived
-  server.close();
 });

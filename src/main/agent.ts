@@ -49,6 +49,8 @@ async function compactHistory(history, settings, onEvent) {
         return [{ role: 'user', content: `[Earlier conversation summary]\n${text}` }, ...recent];
     } catch {
         return sliceHistory(history);
+    } finally {
+        onEvent({ type: 'status', agent: 'main', content: null });
     }
 }
 
