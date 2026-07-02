@@ -61,6 +61,7 @@ app.whenReady().then(() => {
   const sessionAllowedTools = new Set<string>();
   const pendingPermissions = new Map<string, (allow: boolean, alwaysAllow: boolean) => void>();
   let permissionCounter = 0;
+  let activeTurn: AbortController | null = null;
 
   ipcMain.on('agent:prompt', (event, prompt: string, workspace: string, profileId: string, history: any) => {
     const settings = configStore.resolveSettings(profileId);
@@ -82,9 +83,11 @@ app.whenReady().then(() => {
     };
 
     // Call the agent loop and stream results back
+    activeTurn?.abort();
+    activeTurn = new AbortController();
     handlePrompt(prompt, workspace, settings, history, (agentEvent) => {
       event.reply('agent:event', agentEvent);
-    }, requestPermission);
+    }, requestPermission, activeTurn.signal);
   });
 
   ipcMain.on('agent:permission-response', (_event, id: string, allow: boolean, alwaysAllow: boolean) => {
@@ -93,6 +96,12 @@ app.whenReady().then(() => {
       pendingPermissions.delete(id);
       resolver(allow, alwaysAllow);
     }
+  });
+
+  ipcMain.on('agent:cancel', () => {
+    activeTurn?.abort();
+    for (const resolver of pendingPermissions.values()) resolver(false, false);
+    pendingPermissions.clear();
   });
 
   app.on('activate', function () {

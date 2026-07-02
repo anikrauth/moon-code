@@ -29,6 +29,7 @@ const TOOL_OUTPUT_CHAR_LIMIT = 30000;
 const READ_DEFAULT_LINES = 2000;
 const READ_CHAR_LIMIT = 50000;
 const LIST_DIR_MAX_ENTRIES = 500;
+const MAX_STEPS = 50;
 
 function truncateOutput(text, limit = TOOL_OUTPUT_CHAR_LIMIT) {
     if (text.length <= limit) return text;
@@ -90,7 +91,7 @@ async function loadProjectMemory(workspace: string): Promise<string> {
     }
 }
 
-function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpawn, settings, spawnState }) {
+function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpawn, settings, spawnState, abortSignal }) {
     const emit = (e) => onEvent({ agent: agentId, ...e });
     const denied = (name) => {
         const res = 'User denied permission for this action.';
@@ -107,7 +108,7 @@ function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpaw
                 emit({ type: 'tool_call', name: 'run_command', arguments: JSON.stringify({ command }) });
                 if (!await requestPermission('run_command', { command }, agentId)) return denied('run_command');
                 try {
-                    const { stdout, stderr } = await execAsync(command, { cwd: workspace, timeout: 60000 });
+                    const { stdout, stderr } = await execAsync(command, { cwd: workspace, timeout: 60000, signal: abortSignal });
                     const output = stdout + (stderr ? `\n[stderr]\n${stderr}` : '');
                     const finalOut = output.trim() ? truncateOutput(output) : 'Command executed successfully (no output).';
                     emit({ type: 'tool_result', name: 'run_command', result: finalOut });
@@ -274,11 +275,11 @@ function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpaw
                 const subSystemPrompt = `You are a Moon Agent subagent working autonomously in the workspace at ${workspace}. Complete the following task using your tools, then reply with concise plain-text findings. Do not ask questions; do not output JSON UI specs.
 ${spawnState.projectMemory ? `\nPROJECT INSTRUCTIONS (from MOON.md in the workspace root — follow these):\n${spawnState.projectMemory}\n` : ''}`;
                 try {
-                    const subTools = makeTools({ workspace, onEvent, requestPermission, agentId: subId, includeSpawn: false, settings, spawnState });
+                    const subTools = makeTools({ workspace, onEvent, requestPermission, agentId: subId, includeSpawn: false, settings, spawnState, abortSignal });
                     const { text } = await runAgentLoop({
                         prompt: task, workspace, settings, history: [],
                         onEvent, requestPermission, agentId: subId,
-                        tools: subTools, systemPrompt: subSystemPrompt, emitText: false,
+                        tools: subTools, systemPrompt: subSystemPrompt, emitText: false, abortSignal,
                     });
                     const res = text?.trim() ? truncateOutput(text) : 'Subagent finished with no output.';
                     onEvent({ type: 'tool_result', name: 'spawn_agent', agent: agentId, result: res });
@@ -294,7 +295,7 @@ ${spawnState.projectMemory ? `\nPROJECT INSTRUCTIONS (from MOON.md in the worksp
     return tools;
 }
 
-async function runAgentLoop({ prompt, workspace, settings, history, onEvent, requestPermission, agentId, tools, systemPrompt, emitText }) {
+async function runAgentLoop({ prompt, workspace, settings, history, onEvent, requestPermission, agentId, tools, systemPrompt, emitText, abortSignal }) {
     const customOpenAI = createOpenAI({
         apiKey: settings.apiKey,
         baseURL: settings.baseUrl || undefined,
@@ -305,7 +306,8 @@ async function runAgentLoop({ prompt, workspace, settings, history, onEvent, req
         system: systemPrompt,
         messages: [...(history ?? []), userMsg],
         tools,
-        stopWhen: stepCountIs(10),
+        abortSignal,
+        stopWhen: stepCountIs(MAX_STEPS),
     });
 
     for await (const part of result.fullStream) {
@@ -326,6 +328,7 @@ export async function handlePrompt(
     history: any[] | undefined,
     onEvent: (event: any) => void,
     requestPermission: (name: string, args: any, agentId: string) => Promise<boolean>,
+    abortSignal?: AbortSignal,
 ) {
     try {
         history = await compactHistory(history, settings, onEvent);
@@ -348,12 +351,12 @@ ${catalog.prompt({
 
         const tools = makeTools({
             workspace, onEvent, requestPermission, agentId: 'main',
-            includeSpawn: true, settings, spawnState: { counter: 0, projectMemory },
+            includeSpawn: true, settings, spawnState: { counter: 0, projectMemory }, abortSignal,
         });
 
         const { responseMessages } = await runAgentLoop({
             prompt, workspace, settings, history, onEvent, requestPermission,
-            agentId: 'main', tools, systemPrompt, emitText: true,
+            agentId: 'main', tools, systemPrompt, emitText: true, abortSignal,
         });
 
         const userMsg = { role: 'user', content: prompt };
@@ -361,7 +364,8 @@ ${catalog.prompt({
 
         onEvent({ type: 'done', history: newHistory });
     } catch (error: any) {
-        onEvent({ type: 'error', agent: 'main', content: error.message });
+        const cancelled = abortSignal?.aborted;
+        onEvent({ type: 'error', agent: 'main', content: cancelled ? 'Cancelled.' : error.message });
         onEvent({ type: 'done' });
     }
 }
