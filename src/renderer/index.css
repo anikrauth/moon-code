@@ -658,6 +658,24 @@ button, input, select, textarea, .chat-container, .rich-input-container {
   opacity: 0.4;
 }
 
+.mcp-meta-error {
+  color: var(--warning-color);
+}
+
+.mcp-secrets-input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, 0.4);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  box-sizing: border-box;
+  resize: vertical;
+}
+
 @keyframes spin {
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }

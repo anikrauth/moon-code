@@ -1,9 +1,9 @@
 // @ts-nocheck
 import React, { useState, useEffect, useRef } from 'react';
 import { FolderOpen, Settings, Bot, X, Plus, History } from 'lucide-react';
-import RichInput, { SkillItem, McpServer } from './RichInput';
+import RichInput, { SkillItem } from './RichInput';
 import SkillsPanel, { SkillEntry, SKILL_CATALOG } from './SkillsPanel';
-import McpPanel, { McpServerEntry, MCP_CATALOG } from './McpPanel';
+import McpPanel from './McpPanel';
 import SessionsPanel from './SessionsPanel';
 import { JSONUIProvider, Renderer } from '@json-render/react';
 import { registry } from './uiRegistry';
@@ -109,8 +109,8 @@ export default function App() {
 
   /* ---- MCP state ---- */
   const [permissionQueue, setPermissionQueue] = useState<any[]>([]);
-  const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
-  const [mcpStatuses, setMcpStatuses] = useState<Record<string, 'connected' | 'disconnected' | 'connecting'>>({});
+  const [mcpData, setMcpData] = useState<any>({ servers: [], statuses: {} });
+  const [mcpForm, setMcpForm] = useState<any>(null); // null closed; {} new; {id,...} edit
   const [showMcpPanel, setShowMcpPanel] = useState(false);
 
   /* ---- Sessions state ---- */
@@ -126,12 +126,6 @@ export default function App() {
             .filter(Boolean)
             .map((s: any) => ({ id: s.id, name: s.name, description: s.description }))
     );
-    const servers = c.connectedMcpIds
-        .map((id: string) => MCP_CATALOG.find((m) => m.id === id))
-        .filter(Boolean)
-        .map((m: any) => ({ id: m.id, name: m.name, status: 'connected', tools: m.tools }));
-    setMcpServers(servers);
-    setMcpStatuses(Object.fromEntries(servers.map((s: any) => [s.id, 'connected'])));
   };
 
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -278,6 +272,10 @@ export default function App() {
             }
         }
         applyConfig(c);
+        window.electron?.mcpList?.().then((d: any) => d && setMcpData(d));
+        window.electron?.onMcpEvent?.((evt: any) => {
+            setMcpData((prev: any) => ({ ...prev, statuses: { ...prev.statuses, [evt.id]: { status: evt.status, toolCount: evt.toolCount, message: evt.message } } }));
+        });
     })();
   }, []);
 
@@ -298,6 +296,10 @@ export default function App() {
   };
 
   const activeProfile = config?.profiles.find((p: any) => p.id === config.activeProfileId) ?? null;
+
+  const connectedMcpServers = mcpData.servers
+      .filter((s: any) => mcpData.statuses[s.id]?.status === 'connected')
+      .map((s: any) => ({ id: s.id, name: s.name, status: 'connected', tools: mcpData.statuses[s.id]?.toolCount }));
 
   const handleSend = () => {
     if (!input.trim() || !workspace || !activeProfile?.hasKey) return;
@@ -353,49 +355,8 @@ export default function App() {
   };
 
   /* ---- MCP handlers ---- */
-  const handleToggleMcp = (server: McpServerEntry) => {
-    if (mcpStatuses[server.id] === 'connecting') return;
-    const isConnected = mcpServers.some((s) => s.id === server.id);
-    if (isConnected) {
-      setMcpServers((prev) => {
-        const next = prev.filter((s) => s.id !== server.id);
-        window.electron?.setMcpIds(next.map((s) => s.id));
-        return next;
-      });
-      setMcpStatuses((prev) => {
-        const next = { ...prev };
-        delete next[server.id];
-        return next;
-      });
-    } else {
-      // Simulate connection
-      setMcpStatuses((prev) => ({ ...prev, [server.id]: 'connecting' }));
-      setTimeout(() => {
-        setMcpServers((prev) => {
-          if (prev.some((s) => s.id === server.id)) return prev;
-          const next = [...prev, { id: server.id, name: server.name, status: 'connected', tools: server.tools }];
-          window.electron?.setMcpIds(next.map((s) => s.id));
-          return next;
-        });
-        setMcpStatuses((prev) => {
-          if (prev[server.id] !== 'connecting') return prev;
-          return { ...prev, [server.id]: 'connected' };
-        });
-      }, 800);
-    }
-  };
-
   const handleDisconnectMcp = (id: string) => {
-    setMcpServers((prev) => {
-      const next = prev.filter((s) => s.id !== id);
-      window.electron?.setMcpIds(next.map((s) => s.id));
-      return next;
-    });
-    setMcpStatuses((prev) => {
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
+    window.electron?.disconnectMcp(id).then(setMcpData);
   };
 
   const respondPermission = (allow: boolean, alwaysAllow: boolean) => {
@@ -516,6 +477,87 @@ export default function App() {
         </div>
       )}
 
+      {/* MCP Server Form Modal */}
+      {mcpForm && (
+        <div className="modal-overlay">
+            <div className="glass-panel modal-content">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <h3 style={{ margin: 0 }}>{mcpForm.id ? 'Edit MCP Server' : 'Add MCP Server'}</h3>
+                    <X size={18} style={{ cursor: 'pointer' }} onClick={() => setMcpForm(null)} />
+                </div>
+                <div>
+                    <label>Name</label>
+                    <input type="text" value={mcpForm.name} onChange={(e) => setMcpForm({ ...mcpForm, name: e.target.value })} placeholder="e.g. GitHub" />
+                </div>
+                <div>
+                    <label>Transport</label>
+                    <select value={mcpForm.transport} onChange={(e) => setMcpForm({ ...mcpForm, transport: e.target.value })}>
+                        <option value="stdio">stdio (local command)</option>
+                        <option value="http">http (remote URL)</option>
+                    </select>
+                </div>
+                {mcpForm.transport === 'stdio' ? (
+                    <>
+                        <div>
+                            <label>Command</label>
+                            <input type="text" value={mcpForm.command} onChange={(e) => setMcpForm({ ...mcpForm, command: e.target.value })} placeholder="npx" />
+                        </div>
+                        <div>
+                            <label>Arguments (space-separated)</label>
+                            <input type="text" value={mcpForm.argsText} onChange={(e) => setMcpForm({ ...mcpForm, argsText: e.target.value })} placeholder="-y @modelcontextprotocol/server-github" />
+                        </div>
+                    </>
+                ) : (
+                    <div>
+                        <label>URL</label>
+                        <input type="text" value={mcpForm.url} onChange={(e) => setMcpForm({ ...mcpForm, url: e.target.value })} placeholder="https://example.com/mcp" />
+                    </div>
+                )}
+                <div>
+                    <label>{mcpForm.transport === 'stdio' ? 'Environment (KEY=value per line)' : 'Headers (Name: value per line)'}</label>
+                    <textarea
+                        className="mcp-secrets-input"
+                        rows={3}
+                        value={mcpForm.secretsText}
+                        onChange={(e) => setMcpForm({ ...mcpForm, secretsText: e.target.value })}
+                        placeholder={mcpForm.hasSecrets ? '•••••••• (leave blank to keep)' : mcpForm.transport === 'stdio' ? 'GITHUB_TOKEN=ghp_…' : 'Authorization: Bearer …'}
+                    />
+                </div>
+                <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+                    <button className="glass-panel" style={{ padding: '10px', cursor: 'pointer', color: 'var(--text-primary)', flexGrow: 1 }} onClick={() => setMcpForm(null)}>Cancel</button>
+                    <button
+                        style={{ background: 'var(--accent-color)', color: '#000', border: 'none', borderRadius: '8px', padding: '10px', cursor: 'pointer', fontWeight: 600, flexGrow: 1 }}
+                        disabled={!mcpForm.name.trim() || (mcpForm.transport === 'stdio' ? !mcpForm.command.trim() : !mcpForm.url.trim())}
+                        onClick={() => {
+                            const def = {
+                                id: mcpForm.id, name: mcpForm.name.trim(), transport: mcpForm.transport,
+                                command: mcpForm.transport === 'stdio' ? mcpForm.command.trim() : undefined,
+                                args: mcpForm.transport === 'stdio' ? mcpForm.argsText.trim().split(/\s+/).filter(Boolean) : undefined,
+                                url: mcpForm.transport === 'http' ? mcpForm.url.trim() : undefined,
+                            };
+                            let rawSecrets;
+                            const lines = mcpForm.secretsText.split('\n').map((l: string) => l.trim()).filter(Boolean);
+                            if (lines.length > 0) {
+                                if (mcpForm.transport === 'stdio') {
+                                    const env = {};
+                                    for (const l of lines) { const i = l.indexOf('='); if (i > 0) env[l.slice(0, i)] = l.slice(i + 1); }
+                                    rawSecrets = { env };
+                                } else {
+                                    const headers = {};
+                                    for (const l of lines) { const i = l.indexOf(':'); if (i > 0) headers[l.slice(0, i).trim()] = l.slice(i + 1).trim(); }
+                                    rawSecrets = { headers };
+                                }
+                            }
+                            window.electron?.upsertMcpServer(def, rawSecrets).then((d: any) => { setMcpData(d); setMcpForm(null); });
+                        }}
+                    >
+                        Save Server
+                    </button>
+                </div>
+            </div>
+        </div>
+      )}
+
       {/* Permission Request Modal */}
       {permissionQueue.length > 0 && (
         <div className="modal-overlay">
@@ -581,9 +623,14 @@ export default function App() {
       <McpPanel
         open={showMcpPanel}
         onClose={() => setShowMcpPanel(false)}
-        connectedIds={mcpServers.map((s) => s.id)}
-        serverStatuses={mcpStatuses}
-        onToggleServer={handleToggleMcp}
+        servers={mcpData.servers}
+        statuses={mcpData.statuses}
+        busy={isTyping}
+        onConnect={(id) => window.electron?.connectMcp(id).then(setMcpData)}
+        onDisconnect={(id) => window.electron?.disconnectMcp(id).then(setMcpData)}
+        onEdit={(server) => setMcpForm({ id: server.id, name: server.name, transport: server.transport, command: server.command ?? '', argsText: (server.args ?? []).join(' '), url: server.url ?? '', secretsText: '', hasSecrets: server.hasSecrets })}
+        onDelete={(id) => window.electron?.deleteMcpServer(id).then(setMcpData)}
+        onAdd={() => setMcpForm({ name: '', transport: 'stdio', command: '', argsText: '', url: '', secretsText: '' })}
       />
 
       {/* Sessions Panel */}
@@ -700,8 +747,11 @@ export default function App() {
           skills={activeSkills}
           onAddSkill={() => setShowSkillsPanel(true)}
           onRemoveSkill={handleRemoveSkill}
-          mcpServers={mcpServers}
-          onConnectMcp={() => setShowMcpPanel(true)}
+          mcpServers={connectedMcpServers}
+          onConnectMcp={() => {
+            setShowMcpPanel(true);
+            window.electron?.mcpList?.().then((d: any) => d && setMcpData(d));
+          }}
           onDisconnectMcp={handleDisconnectMcp}
           profiles={config?.profiles ?? []}
           activeProfileId={config?.activeProfileId ?? null}
