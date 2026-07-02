@@ -271,7 +271,7 @@ function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpaw
             }),
             execute: async ({ pattern }) => {
                 emit({ type: 'tool_call', name: 'glob_search', arguments: JSON.stringify({ pattern }) });
-                const res = globSearch({ workspace, pattern });
+                const res = truncateOutput(globSearch({ workspace, pattern }));
                 emit({ type: 'tool_result', name: 'glob_search', result: res });
                 return res;
             }
@@ -285,13 +285,13 @@ function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpaw
                 caseSensitive: z.boolean().nullable().optional().describe('Match case exactly. Default false.'),
             }),
             execute: async ({ pattern, path: searchPath, filePattern, caseSensitive }) => {
-                emit({ type: 'tool_call', name: 'grep_search', arguments: JSON.stringify({ pattern, path: searchPath, filePattern }) });
-                const res = grepSearch({
+                emit({ type: 'tool_call', name: 'grep_search', arguments: JSON.stringify({ pattern, path: searchPath, filePattern, caseSensitive }) });
+                const res = truncateOutput(grepSearch({
                     workspace, pattern,
                     path: searchPath ?? undefined,
                     filePattern: filePattern ?? undefined,
                     caseSensitive: !!caseSensitive,
-                });
+                }));
                 emit({ type: 'tool_result', name: 'grep_search', result: res });
                 return res;
             }

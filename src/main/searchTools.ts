@@ -35,6 +35,14 @@ function walkWorkspace(root, subdir = '.') {
     const rootAbs = path.resolve(root);
     const startAbs = path.resolve(rootAbs, subdir);
     if (startAbs !== rootAbs && !startAbs.startsWith(rootAbs + path.sep)) return null;
+    let realRoot, realStart;
+    try {
+        realRoot = fs.realpathSync(rootAbs);
+        realStart = fs.realpathSync(startAbs);
+    } catch {
+        return []; // start doesn't exist -> nothing to search
+    }
+    if (realStart !== realRoot && !realStart.startsWith(realRoot + path.sep)) return null;
     const results = [];
     function walk(dirAbs) {
         let entries;
@@ -50,11 +58,11 @@ function walkWorkspace(root, subdir = '.') {
                 if (IGNORED_DIRS.has(entry.name)) continue;
                 walk(abs);
             } else if (entry.isFile()) {
-                results.push(path.relative(rootAbs, abs).split(path.sep).join('/'));
+                results.push(path.relative(realRoot, abs).split(path.sep).join('/'));
             }
         }
     }
-    walk(startAbs);
+    walk(realStart);
     return results;
 }
 

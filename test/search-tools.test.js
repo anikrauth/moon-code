@@ -89,6 +89,17 @@ test('ignored dirs, symlinks, binary, oversize are skipped', (t) => {
   assert.ok(!globOut.includes('linked'));
 });
 
+test('grepSearch path through a symlinked dir cannot escape the workspace', (t) => {
+  const ws = fixture(t, { 'inside.txt': 'clean\n' });
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'moon-outside2-'));
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(outside, 'secret.txt'), 'SECRET_TOKEN\n');
+  fs.symlinkSync(outside, path.join(ws, 'linked'));
+  const out = grepSearch({ workspace: ws, pattern: 'SECRET_TOKEN', path: 'linked' });
+  assert.ok(!out.includes('SECRET_TOKEN'), `escaped: ${out}`);
+  assert.ok(out === 'Error: path escapes the workspace: linked' || out === 'No matches found.');
+});
+
 test('grepSearch trims long lines and caps matches', (t) => {
   const ws = fixture(t, {
     'long.txt': '  ' + 'y'.repeat(500) + 'NEEDLE\n',
