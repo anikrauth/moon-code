@@ -307,7 +307,8 @@ function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpaw
                 const subId = `sub-${++spawnState.counter}`;
                 emit({ type: 'tool_call', name: 'spawn_agent', arguments: JSON.stringify({ task }) });
                 const subSystemPrompt = `You are a Moon Agent subagent working autonomously in the workspace at ${workspace}. Complete the following task using your tools, then reply with concise plain-text findings. Do not ask questions; do not output JSON UI specs.
-${spawnState.projectMemory ? `\nPROJECT INSTRUCTIONS (from MOON.md in the workspace root — follow these):\n${spawnState.projectMemory}\n` : ''}`;
+${spawnState.projectMemory ? `\nPROJECT INSTRUCTIONS (from MOON.md in the workspace root — follow these):\n${spawnState.projectMemory}\n` : ''}
+${spawnState.skillsText ? `\n${spawnState.skillsText}\n` : ''}`;
                 try {
                     const subTools = makeTools({ workspace, onEvent, requestPermission, agentId: subId, includeSpawn: false, settings, spawnState, abortSignal, extraTools });
                     const { text } = await runAgentLoop({
@@ -385,6 +386,7 @@ export async function handlePrompt(
     requestPermission: (name: string, args: any, agentId: string) => Promise<boolean>,
     abortSignal?: AbortSignal,
     extraTools?: any,
+    skillsText?: string,
 ) {
     try {
         history = await compactHistory(history, settings, onEvent, abortSignal);
@@ -393,6 +395,7 @@ export async function handlePrompt(
 
         const systemPrompt = `You are Moon Agent, an advanced coding agentic IDE for Mac. You have full access to the user's workspace at ${workspace}. You must use tools to accomplish the user's requests autonomously. Do NOT wait for the user if you can figure it out. Answer concisely. Use grep_search and glob_search to find code instead of running grep or find through run_command.
 ${projectMemory ? `\nPROJECT INSTRUCTIONS (from ${MEMORY_FILE} in the workspace root — follow these):\n${projectMemory}\n` : ''}
+${skillsText ? `\n${skillsText}\n` : ''}
 ${catalog.prompt({
             system: 'Your final answer to the user must be valid UI spec JSONL (SpecStream format), not plain prose.',
             customRules: [
@@ -407,7 +410,7 @@ ${catalog.prompt({
 
         const tools = makeTools({
             workspace, onEvent, requestPermission, agentId: 'main',
-            includeSpawn: true, settings, spawnState: { counter: 0, projectMemory }, abortSignal, extraTools,
+            includeSpawn: true, settings, spawnState: { counter: 0, projectMemory, skillsText: skillsText ?? '' }, abortSignal, extraTools,
         });
 
         const { responseMessages } = await runAgentLoop({

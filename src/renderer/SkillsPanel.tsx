@@ -1,30 +1,7 @@
 // @ts-nocheck
 import React, { useState } from 'react';
 import { X, Search, Puzzle, Zap, Check, Plus } from 'lucide-react';
-
-/* ------------------------------------------------------------------ */
-/*  Skill catalog (mock data for demo)                                 */
-/* ------------------------------------------------------------------ */
-
-export interface SkillEntry {
-  id: string;
-  name: string;
-  description: string;
-  category: string;
-}
-
-export const SKILL_CATALOG: SkillEntry[] = [
-  { id: 'web-search', name: 'Web Search', description: 'Search the web for real-time information', category: 'Research' },
-  { id: 'code-review', name: 'Code Review', description: 'Analyze code for bugs, style, and best practices', category: 'Development' },
-  { id: 'file-manager', name: 'File Manager', description: 'Read, write, and manage project files', category: 'Development' },
-  { id: 'terminal', name: 'Terminal', description: 'Execute shell commands in the workspace', category: 'Development' },
-  { id: 'git-ops', name: 'Git Operations', description: 'Stage, commit, diff, and manage branches', category: 'Development' },
-  { id: 'test-runner', name: 'Test Runner', description: 'Run and debug test suites', category: 'Testing' },
-  { id: 'docs-gen', name: 'Documentation', description: 'Generate and update project documentation', category: 'Writing' },
-  { id: 'refactor', name: 'Refactor', description: 'Intelligent code refactoring and restructuring', category: 'Development' },
-  { id: 'debug', name: 'Debugger', description: 'Step-through debugging and error analysis', category: 'Development' },
-  { id: 'deploy', name: 'Deploy', description: 'Build and deploy to production environments', category: 'DevOps' },
-];
+import { SKILL_CATALOG } from '../shared/skillCatalog';
 
 /* ------------------------------------------------------------------ */
 /*  Props                                                              */
@@ -34,7 +11,7 @@ interface SkillsPanelProps {
   open: boolean;
   onClose: () => void;
   activeSkillIds: string[];
-  onToggleSkill: (skill: SkillEntry) => void;
+  onToggleSkill: (skill: any) => void;
 }
 
 /* ------------------------------------------------------------------ */

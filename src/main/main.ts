@@ -5,6 +5,7 @@ import { handlePrompt } from './agent';
 import { createConfigStore } from './configStore';
 import { createSessionStore } from './sessionStore';
 import { createMcpManager } from './mcpManager';
+import { SKILL_CATALOG } from '../shared/skillCatalog';
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -150,9 +151,15 @@ app.whenReady().then(() => {
         event.reply('agent:event', { type: 'permission_request', id, name, arguments: args, agent: agentId });
       });
     };
+    const activeSkills = configStore.getConfig().activeSkillIds
+        .map((sid) => SKILL_CATALOG.find((s) => s.id === sid))
+        .filter(Boolean);
+    const skillsText = activeSkills.length
+        ? 'ACTIVE SKILLS — follow these working practices:\n\n' + activeSkills.map((s) => `${s.name}:\n${s.instructions}`).join('\n\n')
+        : '';
     handlePrompt(prompt, workspace, settings, history, (agentEvent) => {
       event.reply('agent:event', agentEvent);
-    }, requestPermission, activeTurn.signal, mcpManager.getAgentTools());
+    }, requestPermission, activeTurn.signal, mcpManager.getAgentTools(), skillsText);
   });
 
   ipcMain.on('agent:permission-response', (_event, id: string, allow: boolean, alwaysAllow: boolean) => {

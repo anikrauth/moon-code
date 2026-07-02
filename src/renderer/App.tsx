@@ -2,7 +2,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { FolderOpen, Settings, Bot, X, Plus, History } from 'lucide-react';
 import RichInput, { SkillItem } from './RichInput';
-import SkillsPanel, { SkillEntry, SKILL_CATALOG } from './SkillsPanel';
+import SkillsPanel from './SkillsPanel';
+import { SKILL_CATALOG } from '../shared/skillCatalog';
 import McpPanel from './McpPanel';
 import SessionsPanel from './SessionsPanel';
 import { JSONUIProvider, Renderer } from '@json-render/react';
@@ -314,7 +315,7 @@ export default function App() {
   };
 
   /* ---- Skills handlers ---- */
-  const handleToggleSkill = (skill: SkillEntry) => {
+  const handleToggleSkill = (skill: any) => {
     setActiveSkills((prev) => {
       const exists = prev.find((s) => s.id === skill.id);
       const next = exists
