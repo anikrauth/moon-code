@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { app, BrowserWindow, ipcMain, dialog, safeStorage } from 'electron';
 import * as path from 'path';
-import { handlePrompt } from './agent';
+import { handlePrompt, forceCompact } from './agent';
 import { createConfigStore } from './configStore';
 import { createSessionStore } from './sessionStore';
 import { createMcpManager } from './mcpManager';
@@ -173,6 +173,17 @@ app.whenReady().then(() => {
   ipcMain.on('agent:cancel', () => {
     activeTurn?.abort();
     flushPendingPermissions();
+  });
+
+  ipcMain.handle('agent:compact', async (event, profileId: string, history: any) => {
+    try {
+        const settings = configStore.resolveSettings(profileId);
+        if (!settings) return { ok: false, error: 'Selected model profile has no API key.' };
+        const compacted = await forceCompact(history ?? [], settings, (e) => event.sender.send('agent:event', e));
+        return { ok: true, history: compacted };
+    } catch (e) {
+        return { ok: false, error: e?.message ?? String(e) };
+    }
   });
 
   app.on('activate', function () {

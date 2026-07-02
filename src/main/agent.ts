@@ -57,8 +57,9 @@ function sliceHistory(history) {
 // tail of large capped tool results can exceed HISTORY_TOKEN_BUDGET and re-trigger
 // compaction on consecutive turns. The Math.max(2, ...) cut floor guarantees at
 // least two messages are summarized per pass, so this converges and never loops.
-async function compactHistory(history, settings, onEvent, abortSignal) {
-    if (!history || (history.length <= MAX_HISTORY && historyTokens(history) <= HISTORY_TOKEN_BUDGET)) return history;
+async function compactHistory(history, settings, onEvent, abortSignal, force = false) {
+    if (!history || history.length <= 2) return history;
+    if (!force && history.length <= MAX_HISTORY && historyTokens(history) <= HISTORY_TOKEN_BUDGET) return history;
     let cut = Math.max(2, history.length - KEEP_RECENT);
     while (cut < history.length && history[cut].role === 'tool') cut++;
     const old = history.slice(0, cut);
@@ -82,6 +83,10 @@ async function compactHistory(history, settings, onEvent, abortSignal) {
     } finally {
         onEvent({ type: 'status', agent: 'main', content: null });
     }
+}
+
+export async function forceCompact(history, settings, onEvent) {
+    return compactHistory(history, settings, onEvent, undefined, true);
 }
 
 async function loadProjectMemory(workspace: string): Promise<string> {
