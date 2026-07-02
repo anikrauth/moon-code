@@ -40,7 +40,11 @@ test('parallel subagents: gated, tagged, no recursion, results returned', { time
   assert.deepStrictEqual(new Set(subToolEvents.map(e => e.agent)), new Set(['sub-1', 'sub-2']));
   const spawnResults = events.filter(e => e.type === 'tool_result' && e.name === 'spawn_agent');
   assert.strictEqual(spawnResults.length, 2);
-  for (const r of spawnResults) assert.match(r.result, /sub findings/);
+  for (const r of spawnResults) { assert.match(r.result, /sub findings/); assert.strictEqual(r.agent, 'main'); }
+  // spawn_agent's own tool_call events carry the PARENT agent id
+  const spawnCalls = events.filter(e => e.type === 'tool_call' && e.name === 'spawn_agent');
+  assert.strictEqual(spawnCalls.length, 2);
+  for (const c of spawnCalls) assert.strictEqual(c.agent, 'main');
   // no recursion: subagent requests must not offer spawn_agent
   const subReqs = server.requests.filter(b => !(b.tools ?? []).some(t => t.function.name === 'spawn_agent'));
   assert.ok(subReqs.length >= 2);
@@ -63,6 +67,7 @@ test('subagent failure is contained as error tool result', async () => {
   });
   const r = events.find(e => e.type === 'tool_result' && e.name === 'spawn_agent');
   assert.match(r.result, /^Error: /);
+  assert.strictEqual(r.agent, 'main'); // error tool_result carries the PARENT agent id
   assert.strictEqual(events.filter(e => e.type === 'error').length, 0); // parent turn survived
   server.close();
 });
