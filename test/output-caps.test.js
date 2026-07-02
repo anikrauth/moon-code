@@ -87,6 +87,25 @@ test('read_file char cap counts only fully shown lines in marker', async (t) => 
   assert.ok(result.length <= 50000 + 100); // capped + marker overhead
 });
 
+test('run_command failure output is capped', async (t) => {
+  const ws = mkWorkspace(t);
+  // Uses console.error + exitCode (not process.exit) so the write flushes fully
+  // before the process exits — process.exit() can truncate an in-flight stderr
+  // write, which would make this test flaky/false-negative.
+  const cmd = `node -e "console.error('E'.repeat(80000)); process.exitCode = 1;"`;
+  const result = await runTool(t, ws, { name: 'run_command', args: { command: cmd } });
+  assert.ok(result.startsWith('Error:'));
+  assert.ok(result.length < 31000);
+  assert.match(result, /\[\.\.\. truncated \d+ chars \.\.\.\]/);
+});
+
+test('single giant line yields sane paging marker', async (t) => {
+  const ws = mkWorkspace(t);
+  fs.writeFileSync(path.join(ws, 'minified.js'), 'x'.repeat(120000));
+  const result = await runTool(t, ws, { name: 'read_file', args: { filePath: 'minified.js' } });
+  assert.match(result, /\[showing lines 1–1 of 1 total/);
+});
+
 test('list_dir caps entries at 500', async (t) => {
   const ws = mkWorkspace(t);
   for (let i = 0; i < 510; i++) fs.writeFileSync(path.join(ws, `f${String(i).padStart(3, '0')}.txt`), '');

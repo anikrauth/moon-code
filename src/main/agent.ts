@@ -44,6 +44,10 @@ function sliceHistory(history) {
     return history.slice(cutIndex);
 }
 
+// Known limitation: the kept KEEP_RECENT tail is not itself token-bounded, so a
+// tail of large capped tool results can exceed HISTORY_TOKEN_BUDGET and re-trigger
+// compaction on consecutive turns. The Math.max(2, ...) cut floor guarantees at
+// least two messages are summarized per pass, so this converges and never loops.
 async function compactHistory(history, settings, onEvent) {
     if (!history || (history.length <= MAX_HISTORY && historyTokens(history) <= HISTORY_TOKEN_BUDGET)) return history;
     let cut = Math.max(2, history.length - KEEP_RECENT);
@@ -102,8 +106,9 @@ function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpaw
                     emit({ type: 'tool_result', name: 'run_command', result: finalOut });
                     return finalOut;
                 } catch (e: any) {
-                    emit({ type: 'tool_result', name: 'run_command', result: `Error: ${e.message}` });
-                    return `Error: ${e.message}`;
+                    const errMsg = truncateOutput(`Error: ${e.message}`);
+                    emit({ type: 'tool_result', name: 'run_command', result: errMsg });
+                    return errMsg;
                 }
             }
         }),
@@ -134,7 +139,7 @@ function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpaw
                         text = text.slice(0, READ_CHAR_LIMIT);
                         charCut = true;
                     }
-                    const lastLine = charCut ? start + text.split('\n').length - 1 : start + window.length;
+                    const lastLine = charCut ? Math.max(start + 1, start + text.split('\n').length - 1) : start + window.length;
                     if (start > 0 || lastLine < total || charCut) {
                         text += `\n[showing lines ${start + 1}–${lastLine} of ${total} total — call again with offset/limit for more]`;
                     }
@@ -248,7 +253,7 @@ ${spawnState.projectMemory ? `\nPROJECT INSTRUCTIONS (from MOON.md in the worksp
                         onEvent, requestPermission, agentId: subId,
                         tools: subTools, systemPrompt: subSystemPrompt, emitText: false,
                     });
-                    const res = text?.trim() ? text : 'Subagent finished with no output.';
+                    const res = text?.trim() ? truncateOutput(text) : 'Subagent finished with no output.';
                     onEvent({ type: 'tool_result', name: 'spawn_agent', agent: agentId, result: res });
                     return res;
                 } catch (e: any) {

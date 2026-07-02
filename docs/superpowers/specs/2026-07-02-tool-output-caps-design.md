@@ -72,3 +72,10 @@ Extend the fake-SSE harness (node:test):
 4. Small outputs pass through byte-identical (no marker).
 5. Compaction token path: 6 messages (below MAX_HISTORY) with huge content (> 160k chars total) → summarize request fired; small 6-message history → no summarize call.
 6. Existing 15 tests keep passing.
+
+## Known limitation
+
+Known limitation: the kept KEEP_RECENT tail is not itself token-bounded, so a
+tail of large capped tool results can exceed HISTORY_TOKEN_BUDGET and re-trigger
+compaction on consecutive turns. The Math.max(2, ...) cut floor guarantees at
+least two messages are summarized per pass, so this converges and never loops.
