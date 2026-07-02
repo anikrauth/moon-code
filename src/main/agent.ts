@@ -21,6 +21,18 @@ const KEEP_RECENT = 8;
 const TRANSCRIPT_CHAR_LIMIT = 30000;
 const MEMORY_FILE = 'MOON.md';
 const MEMORY_CHAR_LIMIT = 12000;
+const TOOL_OUTPUT_CHAR_LIMIT = 30000;
+const READ_DEFAULT_LINES = 2000;
+const READ_CHAR_LIMIT = 50000;
+const LIST_DIR_MAX_ENTRIES = 500;
+
+function truncateOutput(text, limit = TOOL_OUTPUT_CHAR_LIMIT) {
+    if (text.length <= limit) return text;
+    const head = Math.floor(limit * 0.8);
+    const tail = Math.floor(limit * 0.1);
+    const removed = text.length - head - tail;
+    return `${text.slice(0, head)}\n[... truncated ${removed} chars ...]\n${text.slice(-tail)}`;
+}
 
 function sliceHistory(history) {
     let cutIndex = history.length - MAX_HISTORY;
@@ -82,7 +94,7 @@ function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpaw
                 try {
                     const { stdout, stderr } = await execAsync(command, { cwd: workspace, timeout: 60000 });
                     const output = stdout + (stderr ? `\n[stderr]\n${stderr}` : '');
-                    const finalOut = output.trim() ? output : 'Command executed successfully (no output).';
+                    const finalOut = output.trim() ? truncateOutput(output) : 'Command executed successfully (no output).';
                     emit({ type: 'tool_result', name: 'run_command', result: finalOut });
                     return finalOut;
                 } catch (e: any) {
@@ -95,14 +107,35 @@ function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpaw
             description: 'Read the contents of a file.',
             inputSchema: z.object({
                 filePath: z.string().describe('Path to the file, relative to workspace.'),
+                offset: z.number().int().min(1).nullable().optional().describe('1-based line number to start reading from. Default 1.'),
+                limit: z.number().int().min(1).nullable().optional().describe('Maximum number of lines to return. Default 2000.'),
             }),
-            execute: async ({ filePath }) => {
-                emit({ type: 'tool_call', name: 'read_file', arguments: JSON.stringify({ filePath }) });
+            execute: async ({ filePath, offset, limit }) => {
+                emit({ type: 'tool_call', name: 'read_file', arguments: JSON.stringify({ filePath, offset, limit }) });
                 try {
                     const absPath = path.join(workspace, filePath);
                     const content = await fs.promises.readFile(absPath, 'utf-8');
-                    emit({ type: 'tool_result', name: 'read_file', result: content });
-                    return content;
+                    const lines = content.split('\n');
+                    const total = lines.length;
+                    const start = (offset ?? 1) - 1;
+                    if (start >= total) {
+                        const errMsg = `Error: offset ${offset} is beyond end of file (${total} lines).`;
+                        emit({ type: 'tool_result', name: 'read_file', result: errMsg });
+                        return errMsg;
+                    }
+                    const window = lines.slice(start, start + (limit ?? READ_DEFAULT_LINES));
+                    let text = window.join('\n');
+                    let charCut = false;
+                    if (text.length > READ_CHAR_LIMIT) {
+                        text = text.slice(0, READ_CHAR_LIMIT);
+                        charCut = true;
+                    }
+                    const lastLine = charCut ? start + text.split('\n').length : start + window.length;
+                    if (start > 0 || lastLine < total || charCut) {
+                        text += `\n[showing lines ${start + 1}–${lastLine} of ${total} total — call again with offset/limit for more]`;
+                    }
+                    emit({ type: 'tool_result', name: 'read_file', result: text });
+                    return text;
                 } catch (e: any) {
                     const errMsg = `Error reading file: ${e.message}`;
                     emit({ type: 'tool_result', name: 'read_file', result: errMsg });
@@ -178,7 +211,11 @@ function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpaw
                 try {
                     const absPath = path.join(workspace, dirPath);
                     const items = await fs.promises.readdir(absPath);
-                    const res = items.length > 0 ? items.join('\n') : 'Directory is empty.';
+                    let res;
+                    if (items.length === 0) res = 'Directory is empty.';
+                    else if (items.length > LIST_DIR_MAX_ENTRIES) {
+                        res = `${items.slice(0, LIST_DIR_MAX_ENTRIES).join('\n')}\n[... ${items.length - LIST_DIR_MAX_ENTRIES} more entries not shown]`;
+                    } else res = items.join('\n');
                     emit({ type: 'tool_result', name: 'list_dir', result: res });
                     return res;
                 } catch (e: any) {
