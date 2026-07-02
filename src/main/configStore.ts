@@ -9,6 +9,7 @@ const emptyConfig = () => ({
     activeProfileId: null,
     activeSkillIds: [],
     connectedMcpIds: [],
+    mcpServers: [],
 });
 
 export function createConfigStore({ dir, safeStorage }) {
@@ -45,6 +46,19 @@ export function createConfigStore({ dir, safeStorage }) {
         return profile.enc ? safeStorage.decryptString(buf) : buf.toString('utf-8');
     }
 
+    function encryptSecret(raw) {
+        if (safeStorage.isEncryptionAvailable()) {
+            return { data: safeStorage.encryptString(raw).toString('base64'), enc: true };
+        }
+        console.warn('[moon-agent] OS encryption unavailable; storing secret base64-encoded only.');
+        return { data: Buffer.from(raw, 'utf-8').toString('base64'), enc: false };
+    }
+
+    function decryptSecret(data, enc) {
+        const buf = Buffer.from(data, 'base64');
+        return enc ? safeStorage.decryptString(buf) : buf.toString('utf-8');
+    }
+
     return {
         getConfig: () => config,
 
@@ -55,6 +69,7 @@ export function createConfigStore({ dir, safeStorage }) {
                 activeSkillIds: [...config.activeSkillIds],
                 connectedMcpIds: [...config.connectedMcpIds],
                 profiles: config.profiles.map(({ apiKeyEnc, enc, ...rest }) => ({ ...rest, hasKey: !!apiKeyEnc })),
+                mcpServers: config.mcpServers.map(({ secretsEnc, enc, ...rest }) => ({ ...rest, hasSecrets: !!secretsEnc })),
             };
         },
 
@@ -111,6 +126,46 @@ export function createConfigStore({ dir, safeStorage }) {
                 const apiKey = decryptKey(p);
                 if (!apiKey) return null;
                 return { apiKey, model: p.model, baseUrl: p.baseUrl };
+            } catch {
+                return null;
+            }
+        },
+
+        upsertMcpServer(def, rawSecrets) {
+            const existing = def.id ? config.mcpServers.find((s) => s.id === def.id) : null;
+            const id = existing ? existing.id : `m-${randomUUID()}`;
+            const base = {
+                id, name: def.name, transport: def.transport,
+                command: def.command ?? null, args: def.args ?? null, url: def.url ?? null,
+            };
+            let secretFields;
+            if (rawSecrets && Object.keys(rawSecrets).length > 0) {
+                const { data, enc } = encryptSecret(JSON.stringify(rawSecrets));
+                secretFields = { secretsEnc: data, enc };
+            } else if (existing) {
+                secretFields = { secretsEnc: existing.secretsEnc, enc: existing.enc };
+            } else {
+                secretFields = { secretsEnc: null, enc: false };
+            }
+            const next = { ...base, ...secretFields };
+            if (existing) config.mcpServers = config.mcpServers.map((s) => (s.id === id ? next : s));
+            else config.mcpServers.push(next);
+            persist();
+            return id;
+        },
+
+        deleteMcpServer(id) {
+            config.mcpServers = config.mcpServers.filter((s) => s.id !== id);
+            config.connectedMcpIds = config.connectedMcpIds.filter((x) => x !== id);
+            persist();
+        },
+
+        resolveMcpSecrets(id) {
+            const s = config.mcpServers.find((x) => x.id === id);
+            if (!s) return null;
+            if (!s.secretsEnc) return {};
+            try {
+                return JSON.parse(decryptSecret(s.secretsEnc, s.enc));
             } catch {
                 return null;
             }

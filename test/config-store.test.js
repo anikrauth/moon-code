@@ -78,7 +78,7 @@ test('corrupt config file -> empty config, no throw', (t) => {
   const dir = tmpDir(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   fs.writeFileSync(path.join(dir, 'config.json'), '{not json!!!', 'utf-8');
   const s = mkStore(dir);
-  assert.deepStrictEqual(s.getConfig(), { version: 1, profiles: [], activeProfileId: null, activeSkillIds: [], connectedMcpIds: [] });
+  assert.deepStrictEqual(s.getConfig(), { version: 1, profiles: [], activeProfileId: null, activeSkillIds: [], connectedMcpIds: [], mcpServers: [] });
 });
 
 test('setActiveProfile with unknown id is a no-op; resolveSettings unknown id null', (t) => {
