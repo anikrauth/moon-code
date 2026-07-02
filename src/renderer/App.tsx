@@ -359,6 +359,12 @@ export default function App() {
     window.electron?.disconnectMcp(id).then(setMcpData);
   };
 
+  const handleAddMcpPreset = (preset: any) => {
+    const args = preset.args.map((a: string) => (a === '{workspace}' ? (workspace ?? '~') : a));
+    window.electron?.upsertMcpServer({ name: preset.name, transport: 'stdio', command: preset.command, args })
+      .then((d: any) => d && setMcpData(d));
+  };
+
   const respondPermission = (allow: boolean, alwaysAllow: boolean) => {
     const req = permissionQueue[0];
     if (!req) return;
@@ -479,7 +485,7 @@ export default function App() {
 
       {/* MCP Server Form Modal */}
       {mcpForm && (
-        <div className="modal-overlay">
+        <div className="modal-overlay modal-overlay-elevated">
             <div className="glass-panel modal-content">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <h3 style={{ margin: 0 }}>{mcpForm.id ? 'Edit MCP Server' : 'Add MCP Server'}</h3>
@@ -631,6 +637,7 @@ export default function App() {
         onEdit={(server) => setMcpForm({ id: server.id, name: server.name, transport: server.transport, command: server.command ?? '', argsText: (server.args ?? []).join(' '), url: server.url ?? '', secretsText: '', hasSecrets: server.hasSecrets })}
         onDelete={(id) => window.electron?.deleteMcpServer(id).then(setMcpData)}
         onAdd={() => setMcpForm({ name: '', transport: 'stdio', command: '', argsText: '', url: '', secretsText: '' })}
+        onAddPreset={handleAddMcpPreset}
       />
 
       {/* Sessions Panel */}

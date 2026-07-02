@@ -2,7 +2,16 @@
 import React from 'react';
 import { X, Globe, Plug, Plus, Loader2, CheckCircle2, XCircle, Pencil, Trash2 } from 'lucide-react';
 
-export default function McpPanel({ open, onClose, servers, statuses, busy, onConnect, onDisconnect, onEdit, onDelete, onAdd }) {
+const MCP_PRESETS = [
+  { name: 'Filesystem', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '{workspace}'], hint: null },
+  { name: 'GitHub', command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'], hint: 'needs GITHUB_PERSONAL_ACCESS_TOKEN' },
+  { name: 'Memory', command: 'npx', args: ['-y', '@modelcontextprotocol/server-memory'], hint: null },
+  { name: 'Fetch', command: 'npx', args: ['-y', '@modelcontextprotocol/server-fetch'], hint: null },
+  { name: 'Puppeteer', command: 'npx', args: ['-y', '@modelcontextprotocol/server-puppeteer'], hint: null },
+  { name: 'Sequential Thinking', command: 'npx', args: ['-y', '@modelcontextprotocol/server-sequential-thinking'], hint: null },
+];
+
+export default function McpPanel({ open, onClose, servers, statuses, busy, onConnect, onDisconnect, onEdit, onDelete, onAdd, onAddPreset }) {
   if (!open) return null;
   const statusIcon = (id) => {
     const st = statuses[id]?.status ?? 'disconnected';
@@ -56,6 +65,29 @@ export default function McpPanel({ open, onClose, servers, statuses, busy, onCon
             );
           })}
           {servers.length === 0 && <div className="sp-empty">No MCP servers configured yet.</div>}
+          {(() => {
+            const taken = new Set(servers.map((s) => s.name.toLowerCase()));
+            const suggestions = MCP_PRESETS.filter((p) => !taken.has(p.name.toLowerCase()));
+            if (suggestions.length === 0 || busy) return null;
+            return (
+              <>
+                <span className="sp-category-label" style={{ marginTop: '10px' }}>Suggested</span>
+                {suggestions.map((p) => (
+                  <div key={p.name} className="mcp-server-row">
+                    <div className="mcp-server-info">
+                      <div className="mcp-server-icon-wrap"><Plug size={16} /></div>
+                      <div className="mcp-server-text">
+                        <span className="mcp-server-name">{p.name}</span>
+                        <span className="sp-skill-desc">{p.command} {p.args.join(' ')}</span>
+                        {p.hint && <span className="mcp-preset-hint">{p.hint}</span>}
+                      </div>
+                    </div>
+                    <button className="mcp-toggle-btn" onClick={() => onAddPreset(p)}>Add</button>
+                  </div>
+                ))}
+              </>
+            );
+          })()}
         </div>
         <button
           onClick={() => !busy && onAdd()}
