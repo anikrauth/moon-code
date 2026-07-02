@@ -9,4 +9,7 @@ server.tool('echo', { text: z.string() }, async ({ text }) => ({
 server.tool('fail', {}, async () => {
   throw new Error('fixture failure');
 });
+server.tool('getenv', { name: z.string() }, async ({ name }) => ({
+  content: [{ type: 'text', text: process.env[name] ?? '(unset)' }],
+}));
 await server.connect(new StdioServerTransport());

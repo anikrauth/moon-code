@@ -2,6 +2,7 @@
 
 export function createMcpManager({ getServer, resolveSecrets, onStatus }) {
     const connections = new Map(); // id -> { client, tools, serverName }
+    const pending = new Map(); // id -> in-flight connect promise
     const statusMap = {};
 
     const emit = (id, status, extra = {}) => {
@@ -11,7 +12,14 @@ export function createMcpManager({ getServer, resolveSecrets, onStatus }) {
 
     const slug = (s) => String(s).replace(/[^a-zA-Z0-9]+/g, '_');
 
-    async function connect(id) {
+    function connect(id) {
+        if (pending.has(id)) return pending.get(id);
+        const p = doConnect(id).finally(() => { pending.delete(id); });
+        pending.set(id, p);
+        return p;
+    }
+
+    async function doConnect(id) {
         const def = getServer(id);
         if (!def) { emit(id, 'error', { message: 'Unknown server' }); return false; }
         if (connections.has(id)) return true;
@@ -30,11 +38,11 @@ export function createMcpManager({ getServer, resolveSecrets, onStatus }) {
                     requestInit: { headers: secrets.headers ?? {} },
                 });
             } else {
-                const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js');
+                const { StdioClientTransport, getDefaultEnvironment } = await import('@modelcontextprotocol/sdk/client/stdio.js');
                 transport = new StdioClientTransport({
                     command: def.command,
                     args: def.args ?? [],
-                    env: { ...process.env, ...(secrets.env ?? {}) },
+                    env: { ...getDefaultEnvironment(), ...(secrets.env ?? {}) },
                 });
             }
             const client = new Client({ name: 'moon-agent', version: '1.0.0' }, { capabilities: {} });
