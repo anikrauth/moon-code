@@ -22,3 +22,16 @@ test('streams text deltas as separate message events', async () => {
   assert.ok(events.find(e => e.type === 'done').history.length >= 2);
   server.close();
 });
+
+test('all events tagged agent main; permission receives agent id', async () => {
+  const { toolCallChunk, chunk } = require('./helpers/fake-openai');
+  const permArgs = [];
+  const server = await startServer((body) =>
+    body.messages.some(m => m.role === 'tool')
+      ? textChunks('done')
+      : [toolCallChunk('run_command', { command: 'echo hi' }), chunk({}, 'tool_calls')]);
+  const events = await runTurn(server, { permission: async (name, args, agentId) => { permArgs.push([name, agentId]); return true; } });
+  for (const e of events.filter(e => e.type !== 'done')) assert.strictEqual(e.agent, 'main');
+  assert.deepStrictEqual(permArgs, [['run_command', 'main']]);
+  server.close();
+});

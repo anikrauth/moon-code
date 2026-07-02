@@ -49,7 +49,7 @@ app.whenReady().then(() => {
   let permissionCounter = 0;
 
   ipcMain.on('agent:prompt', (event, prompt: string, workspace: string, settings: any, history: any) => {
-    const requestPermission = (name: string, args: any): Promise<boolean> => {
+    const requestPermission = (name: string, args: any, agentId: string): Promise<boolean> => {
       if (sessionAllowedTools.has(name)) return Promise.resolve(true);
       const id = `perm-${++permissionCounter}`;
       return new Promise((resolve) => {
@@ -57,7 +57,7 @@ app.whenReady().then(() => {
           if (allow && alwaysAllow) sessionAllowedTools.add(name);
           resolve(allow);
         });
-        event.reply('agent:event', { type: 'permission_request', id, name, arguments: args });
+        event.reply('agent:event', { type: 'permission_request', id, name, arguments: args, agent: agentId });
       });
     };
 

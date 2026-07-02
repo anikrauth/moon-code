@@ -29,146 +29,169 @@ async function loadProjectMemory(workspace: string): Promise<string> {
     }
 }
 
+function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpawn, settings, spawnState }) {
+    const emit = (e) => onEvent({ agent: agentId, ...e });
+    const denied = (name) => {
+        const res = 'User denied permission for this action.';
+        emit({ type: 'tool_result', name, result: res });
+        return res;
+    };
+    const tools: any = {
+        run_command: tool({
+            description: 'Execute a bash command in the current workspace.',
+            inputSchema: z.object({
+                command: z.string().describe('The command line string to execute.'),
+            }),
+            execute: async ({ command }) => {
+                emit({ type: 'tool_call', name: 'run_command', arguments: JSON.stringify({ command }) });
+                if (!await requestPermission('run_command', { command }, agentId)) return denied('run_command');
+                try {
+                    const { stdout, stderr } = await execAsync(command, { cwd: workspace, timeout: 60000 });
+                    const output = stdout + (stderr ? `\n[stderr]\n${stderr}` : '');
+                    const finalOut = output.trim() ? output : 'Command executed successfully (no output).';
+                    emit({ type: 'tool_result', name: 'run_command', result: finalOut });
+                    return finalOut;
+                } catch (e: any) {
+                    emit({ type: 'tool_result', name: 'run_command', result: `Error: ${e.message}` });
+                    return `Error: ${e.message}`;
+                }
+            }
+        }),
+        read_file: tool({
+            description: 'Read the contents of a file.',
+            inputSchema: z.object({
+                filePath: z.string().describe('Path to the file, relative to workspace.'),
+            }),
+            execute: async ({ filePath }) => {
+                emit({ type: 'tool_call', name: 'read_file', arguments: JSON.stringify({ filePath }) });
+                try {
+                    const absPath = path.join(workspace, filePath);
+                    const content = await fs.promises.readFile(absPath, 'utf-8');
+                    emit({ type: 'tool_result', name: 'read_file', result: content });
+                    return content;
+                } catch (e: any) {
+                    const errMsg = `Error reading file: ${e.message}`;
+                    emit({ type: 'tool_result', name: 'read_file', result: errMsg });
+                    return errMsg;
+                }
+            }
+        }),
+        write_file: tool({
+            description: 'Create a new file with the given content (creates parent directories). For modifying an existing file, use edit_file instead.',
+            inputSchema: z.object({
+                filePath: z.string().describe('Path to the file, relative to workspace.'),
+                content: z.string().describe('The full content to write into the file.'),
+            }),
+            execute: async ({ filePath, content }) => {
+                emit({ type: 'tool_call', name: 'write_file', arguments: JSON.stringify({ filePath }) });
+                if (!await requestPermission('write_file', { filePath }, agentId)) return denied('write_file');
+                try {
+                    const absPath = path.join(workspace, filePath);
+                    await fs.promises.mkdir(path.dirname(absPath), { recursive: true });
+                    await fs.promises.writeFile(absPath, content, 'utf-8');
+                    const res = `Successfully wrote to ${filePath}`;
+                    emit({ type: 'tool_result', name: 'write_file', result: res });
+                    return res;
+                } catch (e: any) {
+                    const errMsg = `Error writing file: ${e.message}`;
+                    emit({ type: 'tool_result', name: 'write_file', result: errMsg });
+                    return errMsg;
+                }
+            }
+        }),
+        edit_file: tool({
+            description: 'Edit an existing file by replacing an exact string match. oldString must appear exactly once in the file — include enough surrounding lines to make it unique.',
+            inputSchema: z.object({
+                filePath: z.string().describe('Path to the file, relative to workspace.'),
+                oldString: z.string().describe('Exact existing text to replace, including whitespace and indentation.'),
+                newString: z.string().describe('The replacement text.'),
+            }),
+            execute: async ({ filePath, oldString, newString }) => {
+                emit({ type: 'tool_call', name: 'edit_file', arguments: JSON.stringify({ filePath }) });
+                if (!await requestPermission('edit_file', { filePath, oldString, newString }, agentId)) return denied('edit_file');
+                try {
+                    const absPath = path.join(workspace, filePath);
+                    const content = await fs.promises.readFile(absPath, 'utf-8');
+                    const occurrences = content.split(oldString).length - 1;
+                    if (occurrences === 0) {
+                        const res = 'Error: oldString not found in file. Read the file and use the exact text, including whitespace.';
+                        emit({ type: 'tool_result', name: 'edit_file', result: res });
+                        return res;
+                    }
+                    if (occurrences > 1) {
+                        const res = `Error: oldString matches ${occurrences} locations. Include more surrounding context to make it unique.`;
+                        emit({ type: 'tool_result', name: 'edit_file', result: res });
+                        return res;
+                    }
+                    await fs.promises.writeFile(absPath, content.replace(oldString, newString), 'utf-8');
+                    const res = `Successfully edited ${filePath}`;
+                    emit({ type: 'tool_result', name: 'edit_file', result: res });
+                    return res;
+                } catch (e: any) {
+                    const errMsg = `Error editing file: ${e.message}`;
+                    emit({ type: 'tool_result', name: 'edit_file', result: errMsg });
+                    return errMsg;
+                }
+            }
+        }),
+        list_dir: tool({
+            description: 'List files and directories in a path.',
+            inputSchema: z.object({
+                dirPath: z.string().describe('Path to the directory, relative to workspace. Use "." for root.'),
+            }),
+            execute: async ({ dirPath }) => {
+                emit({ type: 'tool_call', name: 'list_dir', arguments: JSON.stringify({ dirPath }) });
+                try {
+                    const absPath = path.join(workspace, dirPath);
+                    const items = await fs.promises.readdir(absPath);
+                    const res = items.length > 0 ? items.join('\n') : 'Directory is empty.';
+                    emit({ type: 'tool_result', name: 'list_dir', result: res });
+                    return res;
+                } catch (e: any) {
+                    const errMsg = `Error listing directory: ${e.message}`;
+                    emit({ type: 'tool_result', name: 'list_dir', result: errMsg });
+                    return errMsg;
+                }
+            }
+        })
+    };
+    return tools;
+}
+
+async function runAgentLoop({ prompt, workspace, settings, history, onEvent, requestPermission, agentId, tools, systemPrompt, emitText }) {
+    const customOpenAI = createOpenAI({
+        apiKey: settings.apiKey,
+        baseURL: settings.baseUrl || undefined,
+    });
+    const userMsg = { role: 'user', content: prompt };
+    const result = streamText({
+        model: customOpenAI.chat(settings.model || 'gpt-4o'),
+        system: systemPrompt,
+        messages: [...(history ?? []), userMsg],
+        tools,
+        stopWhen: stepCountIs(10),
+    });
+
+    for await (const part of result.fullStream) {
+        if (part.type === 'text-delta') {
+            if (emitText) onEvent({ type: 'message', agent: agentId, content: part.text });
+        } else if (part.type === 'error') {
+            throw part.error instanceof Error ? part.error : new Error(String(part.error));
+        }
+    }
+
+    return { text: await result.text, responseMessages: await result.responseMessages };
+}
+
 export async function handlePrompt(
     prompt: string,
     workspace: string,
     settings: any,
     history: any[] | undefined,
     onEvent: (event: any) => void,
-    requestPermission: (name: string, args: any) => Promise<boolean>,
+    requestPermission: (name: string, args: any, agentId: string) => Promise<boolean>,
 ) {
     try {
-        const denied = (name: string) => {
-            const res = 'User denied permission for this action.';
-            onEvent({ type: 'tool_result', name, result: res });
-            return res;
-        };
-
-        const tools = {
-            run_command: tool({
-                description: 'Execute a bash command in the current workspace.',
-                inputSchema: z.object({
-                    command: z.string().describe('The command line string to execute.'),
-                }),
-                execute: async ({ command }) => {
-                    onEvent({ type: 'tool_call', name: 'run_command', arguments: JSON.stringify({ command }) });
-                    if (!await requestPermission('run_command', { command })) return denied('run_command');
-                    try {
-                        const { stdout, stderr } = await execAsync(command, { cwd: workspace, timeout: 60000 });
-                        const output = stdout + (stderr ? `\n[stderr]\n${stderr}` : '');
-                        const finalOut = output.trim() ? output : 'Command executed successfully (no output).';
-                        onEvent({ type: 'tool_result', name: 'run_command', result: finalOut });
-                        return finalOut;
-                    } catch (e: any) {
-                        onEvent({ type: 'tool_result', name: 'run_command', result: `Error: ${e.message}` });
-                        return `Error: ${e.message}`;
-                    }
-                }
-            }),
-            read_file: tool({
-                description: 'Read the contents of a file.',
-                inputSchema: z.object({
-                    filePath: z.string().describe('Path to the file, relative to workspace.'),
-                }),
-                execute: async ({ filePath }) => {
-                    onEvent({ type: 'tool_call', name: 'read_file', arguments: JSON.stringify({ filePath }) });
-                    try {
-                        const absPath = path.join(workspace, filePath);
-                        const content = await fs.promises.readFile(absPath, 'utf-8');
-                        onEvent({ type: 'tool_result', name: 'read_file', result: content });
-                        return content;
-                    } catch (e: any) {
-                        const errMsg = `Error reading file: ${e.message}`;
-                        onEvent({ type: 'tool_result', name: 'read_file', result: errMsg });
-                        return errMsg;
-                    }
-                }
-            }),
-            write_file: tool({
-                description: 'Create a new file with the given content (creates parent directories). For modifying an existing file, use edit_file instead.',
-                inputSchema: z.object({
-                    filePath: z.string().describe('Path to the file, relative to workspace.'),
-                    content: z.string().describe('The full content to write into the file.'),
-                }),
-                execute: async ({ filePath, content }) => {
-                    onEvent({ type: 'tool_call', name: 'write_file', arguments: JSON.stringify({ filePath }) });
-                    if (!await requestPermission('write_file', { filePath })) return denied('write_file');
-                    try {
-                        const absPath = path.join(workspace, filePath);
-                        await fs.promises.mkdir(path.dirname(absPath), { recursive: true });
-                        await fs.promises.writeFile(absPath, content, 'utf-8');
-                        const res = `Successfully wrote to ${filePath}`;
-                        onEvent({ type: 'tool_result', name: 'write_file', result: res });
-                        return res;
-                    } catch (e: any) {
-                        const errMsg = `Error writing file: ${e.message}`;
-                        onEvent({ type: 'tool_result', name: 'write_file', result: errMsg });
-                        return errMsg;
-                    }
-                }
-            }),
-            edit_file: tool({
-                description: 'Edit an existing file by replacing an exact string match. oldString must appear exactly once in the file — include enough surrounding lines to make it unique.',
-                inputSchema: z.object({
-                    filePath: z.string().describe('Path to the file, relative to workspace.'),
-                    oldString: z.string().describe('Exact existing text to replace, including whitespace and indentation.'),
-                    newString: z.string().describe('The replacement text.'),
-                }),
-                execute: async ({ filePath, oldString, newString }) => {
-                    onEvent({ type: 'tool_call', name: 'edit_file', arguments: JSON.stringify({ filePath }) });
-                    if (!await requestPermission('edit_file', { filePath, oldString, newString })) return denied('edit_file');
-                    try {
-                        const absPath = path.join(workspace, filePath);
-                        const content = await fs.promises.readFile(absPath, 'utf-8');
-                        const occurrences = content.split(oldString).length - 1;
-                        if (occurrences === 0) {
-                            const res = 'Error: oldString not found in file. Read the file and use the exact text, including whitespace.';
-                            onEvent({ type: 'tool_result', name: 'edit_file', result: res });
-                            return res;
-                        }
-                        if (occurrences > 1) {
-                            const res = `Error: oldString matches ${occurrences} locations. Include more surrounding context to make it unique.`;
-                            onEvent({ type: 'tool_result', name: 'edit_file', result: res });
-                            return res;
-                        }
-                        await fs.promises.writeFile(absPath, content.replace(oldString, newString), 'utf-8');
-                        const res = `Successfully edited ${filePath}`;
-                        onEvent({ type: 'tool_result', name: 'edit_file', result: res });
-                        return res;
-                    } catch (e: any) {
-                        const errMsg = `Error editing file: ${e.message}`;
-                        onEvent({ type: 'tool_result', name: 'edit_file', result: errMsg });
-                        return errMsg;
-                    }
-                }
-            }),
-            list_dir: tool({
-                description: 'List files and directories in a path.',
-                inputSchema: z.object({
-                    dirPath: z.string().describe('Path to the directory, relative to workspace. Use "." for root.'),
-                }),
-                execute: async ({ dirPath }) => {
-                    onEvent({ type: 'tool_call', name: 'list_dir', arguments: JSON.stringify({ dirPath }) });
-                    try {
-                        const absPath = path.join(workspace, dirPath);
-                        const items = await fs.promises.readdir(absPath);
-                        const res = items.length > 0 ? items.join('\n') : 'Directory is empty.';
-                        onEvent({ type: 'tool_result', name: 'list_dir', result: res });
-                        return res;
-                    } catch (e: any) {
-                        const errMsg = `Error listing directory: ${e.message}`;
-                        onEvent({ type: 'tool_result', name: 'list_dir', result: errMsg });
-                        return errMsg;
-                    }
-                }
-            })
-        };
-
-        const customOpenAI = createOpenAI({
-            apiKey: settings.apiKey,
-            baseURL: settings.baseUrl || undefined,
-        });
-
         const projectMemory = await loadProjectMemory(workspace);
 
         const systemPrompt = `You are Moon Agent, an advanced coding agentic IDE for Mac. You have full access to the user's workspace at ${workspace}. You must use tools to accomplish the user's requests autonomously. Do NOT wait for the user if you can figure it out. Answer concisely.
@@ -185,24 +208,17 @@ ${catalog.prompt({
             mode: 'standalone',
         })}`;
 
-        const userMsg = { role: 'user', content: prompt };
-        const result = streamText({
-            model: customOpenAI.chat(settings.model || 'gpt-4o'),
-            system: systemPrompt,
-            messages: [...(history ?? []), userMsg],
-            tools: tools,
-            stopWhen: stepCountIs(10),
+        const tools = makeTools({
+            workspace, onEvent, requestPermission, agentId: 'main',
+            includeSpawn: true, settings, spawnState: { counter: 0, projectMemory },
         });
 
-        for await (const part of result.fullStream) {
-            if (part.type === 'text-delta') {
-                onEvent({ type: 'message', content: part.text });
-            } else if (part.type === 'error') {
-                throw part.error instanceof Error ? part.error : new Error(String(part.error));
-            }
-        }
+        const { responseMessages } = await runAgentLoop({
+            prompt, workspace, settings, history, onEvent, requestPermission,
+            agentId: 'main', tools, systemPrompt, emitText: true,
+        });
 
-        const responseMessages = await result.responseMessages;
+        const userMsg = { role: 'user', content: prompt };
         let newHistory = [...(history ?? []), userMsg, ...responseMessages];
         if (newHistory.length > MAX_HISTORY) {
             let cutIndex = newHistory.length - MAX_HISTORY;
@@ -214,7 +230,7 @@ ${catalog.prompt({
 
         onEvent({ type: 'done', history: newHistory });
     } catch (error: any) {
-        onEvent({ type: 'error', content: error.message });
+        onEvent({ type: 'error', agent: 'main', content: error.message });
         onEvent({ type: 'done' });
     }
 }
