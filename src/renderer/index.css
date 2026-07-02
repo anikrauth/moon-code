@@ -141,9 +141,10 @@ button, input, select, textarea, .chat-container, .rich-input-container {
   box-shadow: 0 0 0 3px rgba(203, 139, 92, 0.08), 0 8px 32px rgba(0, 0, 0, 0.3);
 }
 
+/* Dim only — interaction is gated per control (textarea/buttons carry their own
+   disabled attributes; the Stop button and profile switcher stay active). */
 .rich-input-disabled {
-  opacity: 0.5;
-  pointer-events: none;
+  opacity: 0.65;
 }
 
 /* ---- Chips row ---- */
