@@ -3,6 +3,7 @@ import { app, BrowserWindow, ipcMain, dialog, safeStorage } from 'electron';
 import * as path from 'path';
 import { handlePrompt } from './agent';
 import { createConfigStore } from './configStore';
+import { createSessionStore } from './sessionStore';
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -56,6 +57,21 @@ app.whenReady().then(() => {
   ipcMain.handle('config:setActiveProfile', configHandler((id) => configStore.setActiveProfile(id)));
   ipcMain.handle('config:setSkillIds', configHandler((ids) => configStore.setSkillIds(ids)));
   ipcMain.handle('config:setMcpIds', configHandler((ids) => configStore.setMcpIds(ids)));
+
+  const sessionStore = createSessionStore({ dir: path.join(app.getPath('userData'), 'sessions') });
+  ipcMain.handle('sessions:list', () => {
+    try { return sessionStore.listSessions(); } catch (e) { console.error('[sessions]', e); return []; }
+  });
+  ipcMain.handle('sessions:get', (_event, id: string) => {
+    try { return sessionStore.getSession(id); } catch (e) { console.error('[sessions]', e); return null; }
+  });
+  ipcMain.handle('sessions:save', (_event, snapshot: any) => {
+    try { return sessionStore.saveSession(snapshot); } catch (e) { console.error('[sessions]', e); return snapshot?.id ?? null; }
+  });
+  ipcMain.handle('sessions:delete', (_event, id: string) => {
+    try { sessionStore.deleteSession(id); } catch (e) { console.error('[sessions]', e); }
+    return sessionStore.listSessions();
+  });
 
   // Tools the user approved with "always allow" for the rest of this app session.
   const sessionAllowedTools = new Set<string>();

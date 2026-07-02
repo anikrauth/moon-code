@@ -15,4 +15,8 @@ contextBridge.exposeInMainWorld('electron', {
   setActiveProfile: (id: string) => ipcRenderer.invoke('config:setActiveProfile', id),
   setSkillIds: (ids: string[]) => ipcRenderer.invoke('config:setSkillIds', ids),
   setMcpIds: (ids: string[]) => ipcRenderer.invoke('config:setMcpIds', ids),
+  listSessions: () => ipcRenderer.invoke('sessions:list'),
+  getSession: (id: string) => ipcRenderer.invoke('sessions:get', id),
+  saveSession: (snapshot: any) => ipcRenderer.invoke('sessions:save', snapshot),
+  deleteSession: (id: string) => ipcRenderer.invoke('sessions:delete', id),
 });
