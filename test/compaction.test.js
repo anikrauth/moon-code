@@ -65,6 +65,18 @@ test('few huge messages trigger token-based compaction', async (t) => {
   assert.strictEqual(events.filter((e) => e.type === 'error').length, 0);
 });
 
+test('summarize failure on short huge history falls back without losing conversation', async (t) => {
+  const server = await startServer((body) =>
+    body.tools ? textChunks('answer') : { status: 400 });
+  t.after(() => server.close());
+  const huge = Array.from({ length: 6 }, (_, i) => ({
+    role: i % 2 ? 'assistant' : 'user', content: `turn ${i} ` + 'x'.repeat(30000) }));
+  const events = await run(server, huge);
+  const done = events.find((e) => e.type === 'done');
+  assert.ok(done.history && done.history.length >= 8, 'history preserved via slice fallback');
+  assert.strictEqual(events.filter((e) => e.type === 'error').length, 0);
+});
+
 test('small short history skips compaction entirely', async (t) => {
   const server = await startServer(() => textChunks('answer'));
   t.after(() => server.close());

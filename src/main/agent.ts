@@ -39,7 +39,7 @@ function truncateOutput(text, limit = TOOL_OUTPUT_CHAR_LIMIT) {
 }
 
 function sliceHistory(history) {
-    let cutIndex = history.length - MAX_HISTORY;
+    let cutIndex = Math.max(0, history.length - MAX_HISTORY);
     while (cutIndex < history.length && history[cutIndex].role === 'tool') cutIndex++;
     return history.slice(cutIndex);
 }
