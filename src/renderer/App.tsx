@@ -149,6 +149,11 @@ export default function App() {
     sessionSnapshotRef.current = { messages, workspace, sessionId: currentSessionId };
   }, [messages, workspace, currentSessionId]);
 
+  /* Saves are serialized through this chain: a fast second turn could
+     otherwise start its save before the first save's returned id has been
+     adopted, so both would read sessionId: null and create duplicates. */
+  const saveChainRef = useRef<Promise<void>>(Promise.resolve());
+
   useEffect(() => {
     // Listen for events from main process (only available inside Electron)
     if (!window.electron?.onAgentEvent) return;
@@ -162,13 +167,24 @@ export default function App() {
           const snap = sessionSnapshotRef.current;
           const firstUser = snap.messages.find((m: any) => m.role === 'user');
           if (firstUser && snap.workspace) {
-            window.electron?.saveSession({
-              id: snap.sessionId ?? undefined,
+            const payload = {
               title: firstUser.content.trim().slice(0, 60),
               workspace: snap.workspace,
               messages: snap.messages,
               history: event.history,
-            }).then((id: string) => { if (id) setCurrentSessionId(id); });
+            };
+            saveChainRef.current = saveChainRef.current
+              .then(async () => {
+                // Read the sessionId at execution time: a prior queued save has
+                // already written its adopted id into the ref synchronously,
+                // so this save updates that session instead of duplicating it.
+                const id = await window.electron?.saveSession({ ...payload, id: sessionSnapshotRef.current.sessionId ?? undefined });
+                if (id) {
+                  sessionSnapshotRef.current.sessionId = id;
+                  setCurrentSessionId(id);
+                }
+              })
+              .catch(() => { /* persistence must never break the UI */ });
           }
         }
         return;
