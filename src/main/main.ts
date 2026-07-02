@@ -1,7 +1,8 @@
 // @ts-nocheck
-import { app, BrowserWindow, ipcMain, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, safeStorage } from 'electron';
 import * as path from 'path';
 import { handlePrompt } from './agent';
+import { createConfigStore } from './configStore';
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -43,12 +44,31 @@ app.whenReady().then(() => {
     }
   });
 
+  const configStore = createConfigStore({ dir: app.getPath('userData'), safeStorage });
+
+  const configHandler = (fn) => (_event, ...args) => {
+    try { fn(...args); } catch (e) { console.error('[config]', e); }
+    return configStore.getRedacted();
+  };
+  ipcMain.handle('config:get', () => configStore.getRedacted());
+  ipcMain.handle('config:upsertProfile', configHandler((profile, rawApiKey) => configStore.upsertProfile(profile, rawApiKey)));
+  ipcMain.handle('config:deleteProfile', configHandler((id) => configStore.deleteProfile(id)));
+  ipcMain.handle('config:setActiveProfile', configHandler((id) => configStore.setActiveProfile(id)));
+  ipcMain.handle('config:setSkillIds', configHandler((ids) => configStore.setSkillIds(ids)));
+  ipcMain.handle('config:setMcpIds', configHandler((ids) => configStore.setMcpIds(ids)));
+
   // Tools the user approved with "always allow" for the rest of this app session.
   const sessionAllowedTools = new Set<string>();
   const pendingPermissions = new Map<string, (allow: boolean, alwaysAllow: boolean) => void>();
   let permissionCounter = 0;
 
-  ipcMain.on('agent:prompt', (event, prompt: string, workspace: string, settings: any, history: any) => {
+  ipcMain.on('agent:prompt', (event, prompt: string, workspace: string, profileId: string, history: any) => {
+    const settings = configStore.resolveSettings(profileId);
+    if (!settings) {
+      event.reply('agent:event', { type: 'error', agent: 'main', content: 'Selected model profile has no API key. Open Settings and configure one.' });
+      event.reply('agent:event', { type: 'done' });
+      return;
+    }
     const requestPermission = (name: string, args: any, agentId: string): Promise<boolean> => {
       if (sessionAllowedTools.has(name)) return Promise.resolve(true);
       const id = `perm-${++permissionCounter}`;
