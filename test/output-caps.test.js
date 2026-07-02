@@ -78,6 +78,15 @@ test('small run_command output passes through byte-identical', async (t) => {
   assert.strictEqual(result, 'hello\n');
 });
 
+test('read_file char cap counts only fully shown lines in marker', async (t) => {
+  const ws = mkWorkspace(t);
+  // 3 lines x 30k chars: default window is all 3 lines (90k chars) -> cut at 50k lands mid line 2
+  fs.writeFileSync(path.join(ws, 'wide.txt'), ['L1' + 'a'.repeat(30000), 'L2' + 'b'.repeat(30000), 'L3' + 'c'.repeat(30000)].join('\n'));
+  const result = await runTool(t, ws, { name: 'read_file', args: { filePath: 'wide.txt' } });
+  assert.match(result, /\[showing lines 1–1 of 3 total/);
+  assert.ok(result.length <= 50000 + 100); // capped + marker overhead
+});
+
 test('list_dir caps entries at 500', async (t) => {
   const ws = mkWorkspace(t);
   for (let i = 0; i < 510; i++) fs.writeFileSync(path.join(ws, `f${String(i).padStart(3, '0')}.txt`), '');

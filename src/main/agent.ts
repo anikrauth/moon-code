@@ -130,7 +130,7 @@ function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpaw
                         text = text.slice(0, READ_CHAR_LIMIT);
                         charCut = true;
                     }
-                    const lastLine = charCut ? start + text.split('\n').length : start + window.length;
+                    const lastLine = charCut ? start + text.split('\n').length - 1 : start + window.length;
                     if (start > 0 || lastLine < total || charCut) {
                         text += `\n[showing lines ${start + 1}–${lastLine} of ${total} total — call again with offset/limit for more]`;
                     }
