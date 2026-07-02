@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect, useRef } from 'react';
-import { FolderOpen, Terminal, FileEdit, Settings, Bot, X, Plus } from 'lucide-react';
+import { FolderOpen, Settings, Bot, X, Plus } from 'lucide-react';
 import RichInput, { SkillItem, McpServer } from './RichInput';
 import SkillsPanel, { SkillEntry, SKILL_CATALOG } from './SkillsPanel';
 import McpPanel, { McpServerEntry, MCP_CATALOG } from './McpPanel';
@@ -43,6 +43,38 @@ function AssistantContent({ content, streaming }: { content: string; streaming: 
   }
   if (streaming) return <span>&hellip;</span>;
   return <>{content}</>;
+}
+
+function ToolActivity({ tool }: { tool: any }) {
+  const [expanded, setExpanded] = useState(false);
+  let preview = '';
+  try {
+    const args = JSON.parse(tool.arguments ?? '{}');
+    preview = args.command ?? args.filePath ?? args.dirPath ?? args.task ?? '';
+  } catch {
+    // unparseable arguments — show no preview
+  }
+  if (preview.length > 60) preview = `${preview.slice(0, 60)}…`;
+  const result = tool.result;
+  const isError = !!result && (result.startsWith('Error:') || result === 'User denied permission for this action.' || result === 'aborted');
+  const summary = result ? (result.split('\n').find((l: string) => l.trim()) ?? '').slice(0, 80) : null;
+  return (
+    <div className="activity-item">
+      <div
+        className={`activity-line ${result ? 'activity-clickable' : ''}`}
+        onClick={() => result && setExpanded((e) => !e)}
+        title={result ? (expanded ? 'Collapse output' : 'Expand output') : undefined}
+      >
+        <span className={`activity-marker ${result ? '' : 'activity-pending'}`}>⏺</span>
+        {tool.agent && tool.agent !== 'main' && <span className="agent-badge">{tool.agent}</span>}
+        <span className="activity-label"><strong>{tool.name}</strong>{preview ? `(${preview})` : ''}</span>
+      </div>
+      {summary != null && !expanded && (
+        <div className={`activity-result-summary ${isError ? 'activity-error' : ''}`}>⎿ {summary}</div>
+      )}
+      {expanded && result && <pre className="activity-result-full">{result}</pre>}
+    </div>
+  );
 }
 
 interface ChatMessage {
@@ -527,42 +559,25 @@ export default function App() {
             messages.map((msg, i) => {
                 return (
                 <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
-                    <div style={{
-                        background: msg.role === 'user' ? 'var(--accent-color)' : 'rgba(255,255,255,0.05)',
-                        color: msg.role === 'user' ? '#000' : 'var(--text-primary)',
-                        padding: '12px 16px',
-                        borderRadius: '12px',
-                        maxWidth: '80%',
-                        lineHeight: '1.5'
-                    }}>
-                        {msg.role === 'assistant' ? (
-                            <AssistantContent content={msg.content} streaming={isTyping && i === messages.length - 1} />
-                        ) : msg.content}
-                    </div>
-                    
-                    {/* Tool Calls */}
-                    {msg.toolCalls && msg.toolCalls.map((tool: any, j: number) => (
-                        <div key={j} style={{
-                            marginTop: '8px',
-                            background: 'rgba(0,0,0,0.3)',
-                            border: '1px solid var(--border-color)',
-                            borderRadius: '8px',
-                            padding: '8px 12px',
-                            fontSize: '12px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '8px',
-                            color: 'var(--text-secondary)'
-                        }}>
-                            {tool.name === 'run_command' ? <Terminal size={14} /> : <FileEdit size={14} />}
-                            {tool.agent && tool.agent !== 'main' && (
-                                <span style={{ background: 'rgba(255,255,255,0.1)', borderRadius: '4px', padding: '1px 6px', marginRight: '4px', fontSize: '10px' }}>
-                                    {tool.agent}
-                                </span>
-                            )}
-                            <span>{tool.result ? 'Ran' : 'Executing'} <strong>{tool.name}</strong>{tool.result ? '' : '...'}</span>
+                    {msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0 && (
+                        <div className="activity-block">
+                            {msg.toolCalls.map((tool: any, j: number) => <ToolActivity key={j} tool={tool} />)}
                         </div>
-                    ))}
+                    )}
+                    {(msg.role === 'user' || msg.content !== '' || (isTyping && i === messages.length - 1)) && (
+                        <div style={{
+                            background: msg.role === 'user' ? 'var(--accent-color)' : 'rgba(255,255,255,0.05)',
+                            color: msg.role === 'user' ? '#000' : 'var(--text-primary)',
+                            padding: '12px 16px',
+                            borderRadius: '12px',
+                            maxWidth: '80%',
+                            lineHeight: '1.5'
+                        }}>
+                            {msg.role === 'assistant' ? (
+                                <AssistantContent content={msg.content} streaming={isTyping && i === messages.length - 1} />
+                            ) : msg.content}
+                        </div>
+                    )}
                 </div>
                 );
             })

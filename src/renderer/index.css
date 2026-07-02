@@ -661,3 +661,67 @@ button, input, select, textarea, .chat-container, .rich-input-container {
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }
 }
+
+/* ---- Tool activity timeline ---- */
+.activity-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+  max-width: 80%;
+}
+.activity-item {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.activity-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.activity-clickable {
+  cursor: pointer;
+}
+.activity-marker {
+  color: var(--accent-color);
+  font-size: 11px;
+  line-height: 1;
+}
+.activity-pending {
+  animation: activity-pulse 1.2s ease-in-out infinite;
+}
+@keyframes activity-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+.activity-label strong {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.activity-result-summary {
+  padding-left: 21px;
+  opacity: 0.8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.activity-error {
+  color: var(--warning-color);
+}
+.activity-result-full {
+  margin: 4px 0 4px 21px;
+  background: rgba(0, 0, 0, 0.4);
+  padding: 10px;
+  border-radius: 8px;
+  max-height: 200px;
+  overflow: auto;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.agent-badge {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 10px;
+}
