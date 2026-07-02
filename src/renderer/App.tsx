@@ -66,6 +66,7 @@ export default function App() {
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [statusText, setStatusText] = useState<string | null>(null);
   const [settings, setSettings] = useState<AppSettings>(() => {
     try {
       const saved = localStorage.getItem('moon-agent-settings');
@@ -98,11 +99,16 @@ export default function App() {
     window.electron.onAgentEvent((event: any) => {
       if (event.type === 'done') {
         setIsTyping(false);
+        setStatusText(null);
         if (event.history) setHistory(event.history);
         return;
       }
       if (event.type === 'permission_request') {
         setPermissionQueue(prev => [...prev, event]);
+        return;
+      }
+      if (event.type === 'status') {
+        setStatusText(event.content);
         return;
       }
       setMessages(prev => {
@@ -124,7 +130,8 @@ export default function App() {
             }
         } else if (event.type === 'tool_result') {
             if (lastMsg && lastMsg.toolCalls) {
-                const callIdx = lastMsg.toolCalls.findIndex((c: any) => c.name === event.name && !c.result);
+                const callIdx = lastMsg.toolCalls.findIndex((c: any) =>
+                    c.name === event.name && (c.agent ?? 'main') === (event.agent ?? 'main') && !c.result);
                 if (callIdx !== -1) {
                     const toolCalls = [...lastMsg.toolCalls];
                     toolCalls[callIdx] = { ...toolCalls[callIdx], result: event.result };
@@ -161,12 +168,13 @@ export default function App() {
 
   const handleSend = () => {
     if (!input.trim() || !workspace || !settings.apiKey) return;
-    
+
     const newMsg: ChatMessage = { id: Date.now().toString(), role: 'user', content: input };
     setMessages(prev => [...prev, newMsg]);
     setInput('');
     setIsTyping(true);
-    
+    setStatusText(null);
+
     window.electron?.sendPrompt(input, workspace, settings, history);
   };
 
@@ -335,7 +343,7 @@ export default function App() {
           <div className="glass-panel modal-content">
             <h3 style={{ margin: 0 }}>Permission required</h3>
             <p style={{ margin: '8px 0', color: 'var(--text-secondary)' }}>
-              The agent wants to run <strong>{permissionQueue[0].name}</strong>:
+                {permissionQueue[0].agent && permissionQueue[0].agent !== 'main' ? `Subagent ${permissionQueue[0].agent}` : 'The agent'} wants to run <strong>{permissionQueue[0].name}</strong>:
             </p>
             <pre style={{
               background: 'rgba(0,0,0,0.4)',
@@ -463,9 +471,9 @@ export default function App() {
                     
                     {/* Tool Calls */}
                     {msg.toolCalls && msg.toolCalls.map((tool: any, j: number) => (
-                        <div key={j} style={{ 
-                            marginTop: '8px', 
-                            background: 'rgba(0,0,0,0.3)', 
+                        <div key={j} style={{
+                            marginTop: '8px',
+                            background: 'rgba(0,0,0,0.3)',
                             border: '1px solid var(--border-color)',
                             borderRadius: '8px',
                             padding: '8px 12px',
@@ -476,6 +484,11 @@ export default function App() {
                             color: 'var(--text-secondary)'
                         }}>
                             {tool.name === 'run_command' ? <Terminal size={14} /> : <FileEdit size={14} />}
+                            {tool.agent && tool.agent !== 'main' && (
+                                <span style={{ background: 'rgba(255,255,255,0.1)', borderRadius: '4px', padding: '1px 6px', marginRight: '4px', fontSize: '10px' }}>
+                                    {tool.agent}
+                                </span>
+                            )}
                             <span>{tool.result ? 'Ran' : 'Executing'} <strong>{tool.name}</strong>{tool.result ? '' : '...'}</span>
                         </div>
                     ))}
@@ -485,7 +498,7 @@ export default function App() {
         )}
         {isTyping && (
             <div style={{ color: 'var(--text-secondary)', fontSize: '14px', padding: '10px' }}>
-                Agent is thinking...
+                {statusText ?? 'Agent is thinking...'}
             </div>
         )}
         <div ref={chatEndRef} />
