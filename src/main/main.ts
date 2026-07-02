@@ -74,7 +74,13 @@ app.whenReady().then(() => {
       event.reply('agent:event', { type: 'done' });
       return;
     }
+    // Call the agent loop and stream results back
+    activeTurn?.abort();
+    flushPendingPermissions();
+    activeTurn = new AbortController();
+    const turnController = activeTurn;
     const requestPermission = (name: string, args: any, agentId: string): Promise<boolean> => {
+      if (turnController.signal.aborted) return Promise.resolve(false);
       if (sessionAllowedTools.has(name)) return Promise.resolve(true);
       const id = `perm-${++permissionCounter}`;
       return new Promise((resolve) => {
@@ -85,11 +91,6 @@ app.whenReady().then(() => {
         event.reply('agent:event', { type: 'permission_request', id, name, arguments: args, agent: agentId });
       });
     };
-
-    // Call the agent loop and stream results back
-    activeTurn?.abort();
-    flushPendingPermissions();
-    activeTurn = new AbortController();
     handlePrompt(prompt, workspace, settings, history, (agentEvent) => {
       event.reply('agent:event', agentEvent);
     }, requestPermission, activeTurn.signal);
