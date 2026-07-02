@@ -51,6 +51,7 @@ interface RichInputProps {
   onSelectProfile: (id: string) => void;
   busy?: boolean;
   onStop?: () => void;
+  commands?: { name: string; description: string; run: (arg?: string) => void }[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -74,6 +75,7 @@ export default function RichInput({
   onSelectProfile,
   busy = false,
   onStop,
+  commands = [],
 }: RichInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [isFocused, setIsFocused] = useState(false);
@@ -93,12 +95,28 @@ export default function RichInput({
     resize();
   }, [value, resize]);
 
+  /* Slash command menu */
+  const [cmdIndex, setCmdIndex] = useState(0);
+  const cmdQuery = value.startsWith('/') ? value.slice(1).split(' ')[0].toLowerCase() : null;
+  const cmdMatches = cmdQuery !== null ? commands.filter((c) => c.name.startsWith(cmdQuery)) : [];
+  useEffect(() => { setCmdIndex(0); }, [cmdQuery]);
+
+  const runCommand = (cmd) => {
+    const sp = value.indexOf(' ');
+    const arg = sp >= 0 ? value.slice(sp + 1).trim() || undefined : undefined;
+    onChange('');
+    cmd.run(arg);
+  };
+
   /* Keyboard */
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      onSend();
+    if (cmdMatches.length > 0) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setCmdIndex((i) => (i + 1) % cmdMatches.length); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); setCmdIndex((i) => (i - 1 + cmdMatches.length) % cmdMatches.length); return; }
+      if (e.key === 'Escape') { e.preventDefault(); onChange(''); return; }
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); runCommand(cmdMatches[Math.min(cmdIndex, cmdMatches.length - 1)]); return; }
     }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); }
   };
 
   const connectedCount = mcpServers.filter((s) => s.status === 'connected').length;
@@ -108,6 +126,21 @@ export default function RichInput({
     <div
       className={`rich-input-container ${isFocused ? 'rich-input-focused' : ''} ${disabled ? 'rich-input-disabled' : ''}`}
     >
+      {cmdMatches.length > 0 && (
+        <div className="ri-cmd-menu">
+          {cmdMatches.map((c, i) => (
+            <div
+              key={c.name}
+              className={`ri-cmd-item ${i === cmdIndex ? 'ri-cmd-active' : ''}`}
+              onMouseDown={(e) => { e.preventDefault(); runCommand(c); }}
+            >
+              <span className="ri-cmd-name">/{c.name}</span>
+              <span className="ri-cmd-desc">{c.description}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* ---- Attached chips (skills + MCPs) ---- */}
       {hasAttachments && (
         <div className="rich-input-chips">
