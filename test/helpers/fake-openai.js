@@ -28,6 +28,16 @@ function startServer(route) {
         res.end(JSON.stringify(out.body ?? { error: { message: 'mock error' } }));
         return;
       }
+      if (body.stream !== true) {
+        // Non-streaming call (e.g. generateText): synthesize a chat.completion
+        // JSON from the chunk array's text deltas.
+        const content = out.map(c => c.choices?.[0]?.delta?.content ?? '').join('');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ id: 'c1', object: 'chat.completion', created: 1, model: 'mock',
+          choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
+        return;
+      }
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       for (const p of out) res.write(`data: ${JSON.stringify(p)}\n\n`);
       res.write('data: [DONE]\n\n');

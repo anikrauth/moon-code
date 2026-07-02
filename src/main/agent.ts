@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { streamText, tool, stepCountIs } from 'ai';
+import { streamText, tool, stepCountIs, generateText } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { z } from 'zod';
 import * as fs from 'fs';
@@ -17,8 +17,40 @@ dotenv.config();
 import { catalog } from '../shared/uiCatalog';
 
 const MAX_HISTORY = 20;
+const KEEP_RECENT = 8;
+const TRANSCRIPT_CHAR_LIMIT = 30000;
 const MEMORY_FILE = 'MOON.md';
 const MEMORY_CHAR_LIMIT = 12000;
+
+function sliceHistory(history) {
+    let cutIndex = history.length - MAX_HISTORY;
+    while (cutIndex < history.length && history[cutIndex].role === 'tool') cutIndex++;
+    return history.slice(cutIndex);
+}
+
+async function compactHistory(history, settings, onEvent) {
+    if (!history || history.length <= MAX_HISTORY) return history;
+    let cut = history.length - KEEP_RECENT;
+    while (cut < history.length && history[cut].role === 'tool') cut++;
+    const old = history.slice(0, cut);
+    const recent = history.slice(cut);
+    try {
+        onEvent({ type: 'status', agent: 'main', content: 'Compacting history…' });
+        const transcript = old.map(m =>
+            `${m.role}: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`
+        ).join('\n').slice(-TRANSCRIPT_CHAR_LIMIT);
+        const customOpenAI = createOpenAI({ apiKey: settings.apiKey, baseURL: settings.baseUrl || undefined });
+        const { text } = await generateText({
+            model: customOpenAI.chat(settings.model || 'gpt-4o'),
+            system: 'Summarize the conversation compactly. Preserve file paths, decisions made, code changes, and unresolved tasks.',
+            prompt: `Conversation to summarize:\n${transcript}`,
+            maxRetries: 1,
+        });
+        return [{ role: 'user', content: `[Earlier conversation summary]\n${text}` }, ...recent];
+    } catch {
+        return sliceHistory(history);
+    }
+}
 
 async function loadProjectMemory(workspace: string): Promise<string> {
     try {
@@ -221,6 +253,8 @@ export async function handlePrompt(
     requestPermission: (name: string, args: any, agentId: string) => Promise<boolean>,
 ) {
     try {
+        history = await compactHistory(history, settings, onEvent);
+
         const projectMemory = await loadProjectMemory(workspace);
 
         const systemPrompt = `You are Moon Agent, an advanced coding agentic IDE for Mac. You have full access to the user's workspace at ${workspace}. You must use tools to accomplish the user's requests autonomously. Do NOT wait for the user if you can figure it out. Answer concisely.
@@ -248,14 +282,7 @@ ${catalog.prompt({
         });
 
         const userMsg = { role: 'user', content: prompt };
-        let newHistory = [...(history ?? []), userMsg, ...responseMessages];
-        if (newHistory.length > MAX_HISTORY) {
-            let cutIndex = newHistory.length - MAX_HISTORY;
-            while (cutIndex < newHistory.length && newHistory[cutIndex].role === 'tool') {
-                cutIndex++;
-            }
-            newHistory = newHistory.slice(cutIndex);
-        }
+        const newHistory = [...(history ?? []), userMsg, ...responseMessages];
 
         onEvent({ type: 'done', history: newHistory });
     } catch (error: any) {
