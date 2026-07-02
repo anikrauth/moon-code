@@ -2,6 +2,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Send,
+  Square,
   Plus,
   Puzzle,
   Plug,
@@ -48,6 +49,8 @@ interface RichInputProps {
   profiles: { id: string; name: string }[];
   activeProfileId: string | null;
   onSelectProfile: (id: string) => void;
+  busy?: boolean;
+  onStop?: () => void;
 }
 
 /* ------------------------------------------------------------------ */
@@ -69,6 +72,8 @@ export default function RichInput({
   profiles,
   activeProfileId,
   onSelectProfile,
+  busy = false,
+  onStop,
 }: RichInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [isFocused, setIsFocused] = useState(false);
@@ -210,15 +215,26 @@ export default function RichInput({
           </button>
         </div>
 
-        {/* Send */}
-        <button
-          className={`ri-send-btn ${value.trim() && !disabled ? 'ri-send-active' : ''}`}
-          onClick={onSend}
-          disabled={!value.trim() || disabled}
-          aria-label="Send message"
-        >
-          <Send size={16} />
-        </button>
+        {/* Send / Stop */}
+        {busy ? (
+          <button
+            className="ri-send-btn ri-send-active"
+            onClick={onStop}
+            aria-label="Stop generation"
+            title="Stop"
+          >
+            <Square size={14} />
+          </button>
+        ) : (
+          <button
+            className={`ri-send-btn ${value.trim() && !disabled ? 'ri-send-active' : ''}`}
+            onClick={onSend}
+            disabled={!value.trim() || disabled}
+            aria-label="Send message"
+          >
+            <Send size={16} />
+          </button>
+        )}
       </div>
     </div>
   );

@@ -141,6 +141,7 @@ export default function App() {
       if (event.type === 'done') {
         setIsTyping(false);
         setStatusText(null);
+        setPermissionQueue([]);
         if (event.history) setHistory(event.history);
         return;
       }
@@ -608,6 +609,8 @@ export default function App() {
           profiles={config?.profiles ?? []}
           activeProfileId={config?.activeProfileId ?? null}
           onSelectProfile={(id) => window.electron?.setActiveProfile(id).then(setConfig)}
+          busy={isTyping}
+          onStop={() => window.electron?.cancelPrompt()}
         />
       </div>
     </div>

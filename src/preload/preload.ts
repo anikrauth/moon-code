@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('electron', {
   selectFolder: () => ipcRenderer.invoke('dialog:openDirectory'),
   sendPrompt: (prompt: string, workspace: string, profileId: string, history: any) => ipcRenderer.send('agent:prompt', prompt, workspace, profileId, history),
   respondPermission: (id: string, allow: boolean, alwaysAllow: boolean) => ipcRenderer.send('agent:permission-response', id, allow, alwaysAllow),
+  cancelPrompt: () => ipcRenderer.send('agent:cancel'),
   onAgentEvent: (callback: (event: any) => void) => {
     ipcRenderer.removeAllListeners('agent:event');
     ipcRenderer.on('agent:event', (_event, value) => callback(value));
