@@ -581,6 +581,9 @@ export default function App() {
           mcpServers={mcpServers}
           onConnectMcp={() => setShowMcpPanel(true)}
           onDisconnectMcp={handleDisconnectMcp}
+          profiles={config?.profiles ?? []}
+          activeProfileId={config?.activeProfileId ?? null}
+          onSelectProfile={(id) => window.electron?.setActiveProfile(id).then(setConfig)}
         />
       </div>
     </div>

@@ -44,6 +44,10 @@ interface RichInputProps {
   mcpServers: McpServer[];
   onConnectMcp: () => void;
   onDisconnectMcp: (id: string) => void;
+  /** Model profiles */
+  profiles: { id: string; name: string }[];
+  activeProfileId: string | null;
+  onSelectProfile: (id: string) => void;
 }
 
 /* ------------------------------------------------------------------ */
@@ -62,6 +66,9 @@ export default function RichInput({
   mcpServers,
   onConnectMcp,
   onDisconnectMcp,
+  profiles,
+  activeProfileId,
+  onSelectProfile,
 }: RichInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [isFocused, setIsFocused] = useState(false);
@@ -151,6 +158,21 @@ export default function RichInput({
       {/* ---- Bottom toolbar ---- */}
       <div className="rich-input-toolbar">
         <div className="ri-toolbar-left">
+          {profiles.length > 0 && (
+            <select
+                className="ri-toolbar-btn"
+                style={{ maxWidth: '160px', cursor: 'pointer' }}
+                value={activeProfileId ?? ''}
+                onChange={(e) => onSelectProfile(e.target.value)}
+                disabled={disabled && profiles.length < 2}
+                title="Switch model"
+            >
+                {profiles.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+            </select>
+          )}
+
           {/* Add skill */}
           <button
             className="ri-toolbar-btn"
