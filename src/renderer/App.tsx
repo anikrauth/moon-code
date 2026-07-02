@@ -1,9 +1,10 @@
 // @ts-nocheck
 import React, { useState, useEffect, useRef } from 'react';
-import { FolderOpen, Settings, Bot, X, Plus } from 'lucide-react';
+import { FolderOpen, Settings, Bot, X, Plus, History } from 'lucide-react';
 import RichInput, { SkillItem, McpServer } from './RichInput';
 import SkillsPanel, { SkillEntry, SKILL_CATALOG } from './SkillsPanel';
 import McpPanel, { McpServerEntry, MCP_CATALOG } from './McpPanel';
+import SessionsPanel from './SessionsPanel';
 import { JSONUIProvider, Renderer } from '@json-render/react';
 import { registry } from './uiRegistry';
 import { parseAssistantContent } from './parseAssistantContent';
@@ -112,6 +113,11 @@ export default function App() {
   const [mcpStatuses, setMcpStatuses] = useState<Record<string, 'connected' | 'disconnected' | 'connecting'>>({});
   const [showMcpPanel, setShowMcpPanel] = useState(false);
 
+  /* ---- Sessions state ---- */
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [sessionList, setSessionList] = useState<any[]>([]);
+  const [showSessionsPanel, setShowSessionsPanel] = useState(false);
+
   const applyConfig = (c: any) => {
     setConfig(c);
     setActiveSkills(
@@ -134,6 +140,15 @@ export default function App() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  /* The `done` handler runs inside a listener registered once (see the `[]`
+     effect below), so it cannot read fresh React state — it would see stale
+     closures. This ref is kept in sync via its own effect and read from
+     inside the done branch instead. */
+  const sessionSnapshotRef = useRef<any>({ messages: [], workspace: null, sessionId: null });
+  useEffect(() => {
+    sessionSnapshotRef.current = { messages, workspace, sessionId: currentSessionId };
+  }, [messages, workspace, currentSessionId]);
+
   useEffect(() => {
     // Listen for events from main process (only available inside Electron)
     if (!window.electron?.onAgentEvent) return;
@@ -142,7 +157,20 @@ export default function App() {
         setIsTyping(false);
         setStatusText(null);
         setPermissionQueue([]);
-        if (event.history) setHistory(event.history);
+        if (event.history) {
+          setHistory(event.history);
+          const snap = sessionSnapshotRef.current;
+          const firstUser = snap.messages.find((m: any) => m.role === 'user');
+          if (firstUser && snap.workspace) {
+            window.electron?.saveSession({
+              id: snap.sessionId ?? undefined,
+              title: firstUser.content.trim().slice(0, 60),
+              workspace: snap.workspace,
+              messages: snap.messages,
+              history: event.history,
+            }).then((id: string) => { if (id) setCurrentSessionId(id); });
+          }
+        }
         return;
       }
       if (event.type === 'permission_request') {
@@ -233,6 +261,7 @@ export default function App() {
   const startNewChat = () => {
     setMessages([]);
     setHistory(undefined);
+    setCurrentSessionId(null);
   };
 
   const selectWorkspace = async () => {
@@ -276,6 +305,23 @@ export default function App() {
       window.electron?.setSkillIds(next.map((s) => s.id));
       return next;
     });
+  };
+
+  /* ---- Sessions handlers ---- */
+  const handleSelectSession = async (id: string) => {
+    const s = await window.electron?.getSession(id);
+    if (!s) return;
+    setWorkspace(s.workspace);
+    setMessages(s.messages ?? []);
+    setHistory(s.history ?? undefined);
+    setCurrentSessionId(s.id);
+    setShowSessionsPanel(false);
+  };
+
+  const handleDeleteSession = async (id: string) => {
+    const list = await window.electron?.deleteSession(id);
+    setSessionList(list ?? []);
+    if (id === currentSessionId) setCurrentSessionId(null);
   };
 
   /* ---- MCP handlers ---- */
@@ -512,6 +558,16 @@ export default function App() {
         onToggleServer={handleToggleMcp}
       />
 
+      {/* Sessions Panel */}
+      <SessionsPanel
+        open={showSessionsPanel}
+        onClose={() => setShowSessionsPanel(false)}
+        sessions={sessionList}
+        onSelect={handleSelectSession}
+        onDelete={handleDeleteSession}
+        busy={isTyping}
+      />
+
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -529,6 +585,19 @@ export default function App() {
             >
             <FolderOpen size={16} />
             {workspace ? workspace.split('/').pop() : 'Select Workspace'}
+            </button>
+
+            <button
+              onClick={async () => {
+                const list = await window.electron?.listSessions();
+                setSessionList(list ?? []);
+                setShowSessionsPanel(true);
+              }}
+              className="glass-panel"
+              style={{ display: 'flex', alignItems: 'center', padding: '8px 12px', color: 'var(--text-primary)', cursor: 'pointer' }}
+              title="Sessions"
+            >
+              <History size={16} />
             </button>
 
             <button
