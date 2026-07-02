@@ -4,6 +4,7 @@ import * as path from 'path';
 import { handlePrompt } from './agent';
 import { createConfigStore } from './configStore';
 import { createSessionStore } from './sessionStore';
+import { createMcpManager } from './mcpManager';
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -58,6 +59,38 @@ app.whenReady().then(() => {
   ipcMain.handle('config:setSkillIds', configHandler((ids) => configStore.setSkillIds(ids)));
   ipcMain.handle('config:setMcpIds', configHandler((ids) => configStore.setMcpIds(ids)));
 
+  const mcpManager = createMcpManager({
+      getServer: (id) => configStore.getRedacted().mcpServers.find((s) => s.id === id),
+      resolveSecrets: (id) => configStore.resolveMcpSecrets(id),
+      onStatus: (evt) => { mainWindow?.webContents.send('mcp:event', evt); },
+  });
+  const mcpListShape = () => ({ servers: configStore.getRedacted().mcpServers, statuses: mcpManager.statuses() });
+
+  ipcMain.handle('mcp:list', () => mcpListShape());
+  ipcMain.handle('mcp:upsertServer', (_e, def, rawSecrets) => {
+      try { configStore.upsertMcpServer(def, rawSecrets); } catch (e) { console.error('[mcp]', e); }
+      return mcpListShape();
+  });
+  ipcMain.handle('mcp:deleteServer', async (_e, id) => {
+      try { await mcpManager.disconnect(id); mcpManager.forget(id); configStore.deleteMcpServer(id); } catch (e) { console.error('[mcp]', e); }
+      return mcpListShape();
+  });
+  ipcMain.handle('mcp:connect', async (_e, id) => {
+      const ok = await mcpManager.connect(id);
+      if (ok) {
+          const ids = new Set(configStore.getConfig().connectedMcpIds); ids.add(id);
+          configStore.setMcpIds([...ids]);
+      }
+      return mcpListShape();
+  });
+  ipcMain.handle('mcp:disconnect', async (_e, id) => {
+      await mcpManager.disconnect(id);
+      configStore.setMcpIds(configStore.getConfig().connectedMcpIds.filter((x) => x !== id));
+      return mcpListShape();
+  });
+
+  for (const id of configStore.getConfig().connectedMcpIds) mcpManager.connect(id);
+
   const sessionStore = createSessionStore({ dir: path.join(app.getPath('userData'), 'sessions') });
   ipcMain.handle('sessions:list', () => {
     try { return sessionStore.listSessions(); } catch (e) { console.error('[sessions]', e); return []; }
@@ -109,7 +142,7 @@ app.whenReady().then(() => {
     };
     handlePrompt(prompt, workspace, settings, history, (agentEvent) => {
       event.reply('agent:event', agentEvent);
-    }, requestPermission, activeTurn.signal);
+    }, requestPermission, activeTurn.signal, mcpManager.getAgentTools());
   });
 
   ipcMain.on('agent:permission-response', (_event, id: string, allow: boolean, alwaysAllow: boolean) => {
@@ -127,6 +160,10 @@ app.whenReady().then(() => {
 
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+
+  app.on('before-quit', () => {
+    mcpManager.disconnectAll();
   });
 });
 

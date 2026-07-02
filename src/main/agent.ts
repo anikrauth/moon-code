@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { streamText, tool, stepCountIs, generateText } from 'ai';
+import { streamText, tool, stepCountIs, generateText, jsonSchema } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { z } from 'zod';
 import * as fs from 'fs';
@@ -93,7 +93,7 @@ async function loadProjectMemory(workspace: string): Promise<string> {
     }
 }
 
-function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpawn, settings, spawnState, abortSignal }) {
+function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpawn, settings, spawnState, abortSignal, extraTools }) {
     const emit = (e) => onEvent({ agent: agentId, ...e });
     const denied = (name) => {
         const res = 'User denied permission for this action.';
@@ -309,7 +309,7 @@ function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpaw
                 const subSystemPrompt = `You are a Moon Agent subagent working autonomously in the workspace at ${workspace}. Complete the following task using your tools, then reply with concise plain-text findings. Do not ask questions; do not output JSON UI specs.
 ${spawnState.projectMemory ? `\nPROJECT INSTRUCTIONS (from MOON.md in the workspace root — follow these):\n${spawnState.projectMemory}\n` : ''}`;
                 try {
-                    const subTools = makeTools({ workspace, onEvent, requestPermission, agentId: subId, includeSpawn: false, settings, spawnState, abortSignal });
+                    const subTools = makeTools({ workspace, onEvent, requestPermission, agentId: subId, includeSpawn: false, settings, spawnState, abortSignal, extraTools });
                     const { text } = await runAgentLoop({
                         prompt: task, workspace, settings, history: [],
                         onEvent, requestPermission, agentId: subId,
@@ -325,6 +325,27 @@ ${spawnState.projectMemory ? `\nPROJECT INSTRUCTIONS (from MOON.md in the worksp
                 }
             }
         });
+    }
+    if (extraTools) {
+        for (const [name, def] of Object.entries(extraTools)) {
+            tools[name] = tool({
+                description: def.description,
+                inputSchema: jsonSchema(def.inputSchema),
+                execute: async (args) => {
+                    emit({ type: 'tool_call', name, arguments: JSON.stringify(args ?? {}) });
+                    if (!await requestPermission(name, args, agentId)) return denied(name);
+                    let res;
+                    try {
+                        res = await def.execute(args);
+                    } catch (e) {
+                        res = `Error: ${e.message}`;
+                    }
+                    const out = truncateOutput(typeof res === 'string' ? res : JSON.stringify(res));
+                    emit({ type: 'tool_result', name, result: out });
+                    return out;
+                }
+            });
+        }
     }
     return tools;
 }
@@ -363,6 +384,7 @@ export async function handlePrompt(
     onEvent: (event: any) => void,
     requestPermission: (name: string, args: any, agentId: string) => Promise<boolean>,
     abortSignal?: AbortSignal,
+    extraTools?: any,
 ) {
     try {
         history = await compactHistory(history, settings, onEvent, abortSignal);
@@ -385,7 +407,7 @@ ${catalog.prompt({
 
         const tools = makeTools({
             workspace, onEvent, requestPermission, agentId: 'main',
-            includeSpawn: true, settings, spawnState: { counter: 0, projectMemory }, abortSignal,
+            includeSpawn: true, settings, spawnState: { counter: 0, projectMemory }, abortSignal, extraTools,
         });
 
         const { responseMessages } = await runAgentLoop({

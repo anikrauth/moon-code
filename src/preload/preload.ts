@@ -19,4 +19,13 @@ contextBridge.exposeInMainWorld('electron', {
   getSession: (id: string) => ipcRenderer.invoke('sessions:get', id),
   saveSession: (snapshot: any) => ipcRenderer.invoke('sessions:save', snapshot),
   deleteSession: (id: string) => ipcRenderer.invoke('sessions:delete', id),
+  mcpList: () => ipcRenderer.invoke('mcp:list'),
+  upsertMcpServer: (def: any, rawSecrets?: any) => ipcRenderer.invoke('mcp:upsertServer', def, rawSecrets),
+  deleteMcpServer: (id: string) => ipcRenderer.invoke('mcp:deleteServer', id),
+  connectMcp: (id: string) => ipcRenderer.invoke('mcp:connect', id),
+  disconnectMcp: (id: string) => ipcRenderer.invoke('mcp:disconnect', id),
+  onMcpEvent: (callback: (event: any) => void) => {
+    ipcRenderer.removeAllListeners('mcp:event');
+    ipcRenderer.on('mcp:event', (_event, value) => callback(value));
+  },
 });
