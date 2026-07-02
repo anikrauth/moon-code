@@ -52,6 +52,12 @@ interface ChatMessage {
   toolCalls?: any[];
 }
 
+/* StrictMode double-invokes effects in dev; both invocations would await
+   getConfig() concurrently, both see profiles.length === 0, and both run the
+   one-time migration — duplicating the "Default" profile. Module-level (not a
+   ref) so the guard also survives a StrictMode unmount/remount cycle. */
+let configLoadStarted = false;
+
 export default function App() {
   const [workspace, setWorkspace] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -155,6 +161,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (configLoadStarted) return;
+    configLoadStarted = true;
     (async () => {
         if (!window.electron?.getConfig) return;
         let c = await window.electron.getConfig();
