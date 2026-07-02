@@ -13,7 +13,7 @@ export interface SkillEntry {
   category: string;
 }
 
-const SKILL_CATALOG: SkillEntry[] = [
+export const SKILL_CATALOG: SkillEntry[] = [
   { id: 'web-search', name: 'Web Search', description: 'Search the web for real-time information', category: 'Research' },
   { id: 'code-review', name: 'Code Review', description: 'Analyze code for bugs, style, and best practices', category: 'Development' },
   { id: 'file-manager', name: 'File Manager', description: 'Read, write, and manage project files', category: 'Development' },

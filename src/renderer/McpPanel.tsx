@@ -14,7 +14,7 @@ export interface McpServerEntry {
   tools: number;
 }
 
-const MCP_CATALOG: McpServerEntry[] = [
+export const MCP_CATALOG: McpServerEntry[] = [
   { id: 'filesystem', name: 'Filesystem', description: 'Read and write files on the local filesystem', protocol: 'stdio', tools: 8 },
   { id: 'github', name: 'GitHub', description: 'Manage repos, PRs, issues, and actions', protocol: 'sse', tools: 14 },
   { id: 'postgres', name: 'PostgreSQL', description: 'Query and manage PostgreSQL databases', protocol: 'stdio', tools: 6 },

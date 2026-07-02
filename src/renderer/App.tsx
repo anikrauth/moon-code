@@ -2,8 +2,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { FolderOpen, Terminal, FileEdit, Settings, Bot, X, Plus } from 'lucide-react';
 import RichInput, { SkillItem, McpServer } from './RichInput';
-import SkillsPanel, { SkillEntry } from './SkillsPanel';
-import McpPanel, { McpServerEntry } from './McpPanel';
+import SkillsPanel, { SkillEntry, SKILL_CATALOG } from './SkillsPanel';
+import McpPanel, { McpServerEntry, MCP_CATALOG } from './McpPanel';
 import { JSONUIProvider, Renderer } from '@json-render/react';
 import { registry } from './uiRegistry';
 import { parseAssistantContent } from './parseAssistantContent';
@@ -52,13 +52,6 @@ interface ChatMessage {
   toolCalls?: any[];
 }
 
-interface AppSettings {
-  provider: string;
-  apiKey: string;
-  model: string;
-  baseUrl: string;
-}
-
 export default function App() {
   const [workspace, setWorkspace] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -67,15 +60,8 @@ export default function App() {
   const [isTyping, setIsTyping] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [statusText, setStatusText] = useState<string | null>(null);
-  const [settings, setSettings] = useState<AppSettings>(() => {
-    try {
-      const saved = localStorage.getItem('moon-agent-settings');
-      if (saved) return JSON.parse(saved);
-    } catch {
-      // corrupt saved settings — fall through to defaults
-    }
-    return { provider: 'OpenAI', apiKey: '', model: 'gpt-4o', baseUrl: '' };
-  });
+  const [config, setConfig] = useState<any>(null);
+  const [profileForm, setProfileForm] = useState<any>(null); // null = closed; {} = new; {id,...} = edit
 
   /* ---- Skills state ---- */
   const [activeSkills, setActiveSkills] = useState<SkillItem[]>([]);
@@ -86,7 +72,23 @@ export default function App() {
   const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
   const [mcpStatuses, setMcpStatuses] = useState<Record<string, 'connected' | 'disconnected' | 'connecting'>>({});
   const [showMcpPanel, setShowMcpPanel] = useState(false);
-  
+
+  const applyConfig = (c: any) => {
+    setConfig(c);
+    setActiveSkills(
+        c.activeSkillIds
+            .map((id: string) => SKILL_CATALOG.find((s) => s.id === id))
+            .filter(Boolean)
+            .map((s: any) => ({ id: s.id, name: s.name, description: s.description }))
+    );
+    const servers = c.connectedMcpIds
+        .map((id: string) => MCP_CATALOG.find((m) => m.id === id))
+        .filter(Boolean)
+        .map((m: any) => ({ id: m.id, name: m.name, status: 'connected', tools: m.tools }));
+    setMcpServers(servers);
+    setMcpStatuses(Object.fromEntries(servers.map((s: any) => [s.id, 'connected'])));
+  };
+
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -152,6 +154,32 @@ export default function App() {
     });
   }, []);
 
+  useEffect(() => {
+    (async () => {
+        if (!window.electron?.getConfig) return;
+        let c = await window.electron.getConfig();
+        if (c.profiles.length === 0) {
+            try {
+                const saved = localStorage.getItem('moon-agent-settings');
+                if (saved) {
+                    const old = JSON.parse(saved);
+                    if (old.apiKey) {
+                        c = await window.electron.upsertProfile(
+                            { name: 'Default', provider: old.provider || 'OpenAI', model: old.model || 'gpt-4o', baseUrl: old.baseUrl || '' },
+                            old.apiKey
+                        );
+                    }
+                    localStorage.removeItem('moon-agent-settings');
+                }
+            } catch {
+                // unparseable legacy settings — drop them
+                localStorage.removeItem('moon-agent-settings');
+            }
+        }
+        applyConfig(c);
+    })();
+  }, []);
+
   const startNewChat = () => {
     setMessages([]);
     setHistory(undefined);
@@ -166,8 +194,10 @@ export default function App() {
     }
   };
 
+  const activeProfile = config?.profiles.find((p: any) => p.id === config.activeProfileId) ?? null;
+
   const handleSend = () => {
-    if (!input.trim() || !workspace || !settings.apiKey) return;
+    if (!input.trim() || !workspace || !activeProfile?.hasKey) return;
 
     const newMsg: ChatMessage = { id: Date.now().toString(), role: 'user', content: input };
     setMessages(prev => [...prev, newMsg]);
@@ -175,25 +205,27 @@ export default function App() {
     setIsTyping(true);
     setStatusText(null);
 
-    window.electron?.sendPrompt(input, workspace, settings, history);
-  };
-
-  const handleSaveSettings = () => {
-    localStorage.setItem('moon-agent-settings', JSON.stringify(settings));
-    setShowSettings(false);
+    window.electron?.sendPrompt(input, workspace, config.activeProfileId, history);
   };
 
   /* ---- Skills handlers ---- */
   const handleToggleSkill = (skill: SkillEntry) => {
     setActiveSkills((prev) => {
       const exists = prev.find((s) => s.id === skill.id);
-      if (exists) return prev.filter((s) => s.id !== skill.id);
-      return [...prev, { id: skill.id, name: skill.name, description: skill.description }];
+      const next = exists
+        ? prev.filter((s) => s.id !== skill.id)
+        : [...prev, { id: skill.id, name: skill.name, description: skill.description }];
+      window.electron?.setSkillIds(next.map((s) => s.id));
+      return next;
     });
   };
 
   const handleRemoveSkill = (id: string) => {
-    setActiveSkills((prev) => prev.filter((s) => s.id !== id));
+    setActiveSkills((prev) => {
+      const next = prev.filter((s) => s.id !== id);
+      window.electron?.setSkillIds(next.map((s) => s.id));
+      return next;
+    });
   };
 
   /* ---- MCP handlers ---- */
@@ -201,7 +233,11 @@ export default function App() {
     if (mcpStatuses[server.id] === 'connecting') return;
     const isConnected = mcpServers.some((s) => s.id === server.id);
     if (isConnected) {
-      setMcpServers((prev) => prev.filter((s) => s.id !== server.id));
+      setMcpServers((prev) => {
+        const next = prev.filter((s) => s.id !== server.id);
+        window.electron?.setMcpIds(next.map((s) => s.id));
+        return next;
+      });
       setMcpStatuses((prev) => {
         const next = { ...prev };
         delete next[server.id];
@@ -213,7 +249,9 @@ export default function App() {
       setTimeout(() => {
         setMcpServers((prev) => {
           if (prev.some((s) => s.id === server.id)) return prev;
-          return [...prev, { id: server.id, name: server.name, status: 'connected', tools: server.tools }];
+          const next = [...prev, { id: server.id, name: server.name, status: 'connected', tools: server.tools }];
+          window.electron?.setMcpIds(next.map((s) => s.id));
+          return next;
         });
         setMcpStatuses((prev) => {
           if (prev[server.id] !== 'connecting') return prev;
@@ -224,7 +262,11 @@ export default function App() {
   };
 
   const handleDisconnectMcp = (id: string) => {
-    setMcpServers((prev) => prev.filter((s) => s.id !== id));
+    setMcpServers((prev) => {
+      const next = prev.filter((s) => s.id !== id);
+      window.electron?.setMcpIds(next.map((s) => s.id));
+      return next;
+    });
     setMcpStatuses((prev) => {
       const next = { ...prev };
       delete next[id];
@@ -254,11 +296,11 @@ export default function App() {
     { label: 'Custom (OpenAI-Compatible)', defaultBase: '', defaultModel: '' }
   ];
 
-  const inputDisabled = !workspace || isTyping || !settings.apiKey;
+  const inputDisabled = !workspace || isTyping || !activeProfile?.hasKey;
   const inputPlaceholder = !workspace
     ? 'Select a workspace to get started...'
-    : !settings.apiKey
-      ? 'Configure your API key in Settings...'
+    : !activeProfile?.hasKey
+      ? 'Add a model profile in Settings…'
       : 'Ask Moon Agent anything. Shift+Enter for new line.';
 
   return (
@@ -273,66 +315,79 @@ export default function App() {
                 <X size={18} style={{ cursor: 'pointer' }} onClick={() => setShowSettings(false)} />
             </div>
             
-            <div>
-                <label>Provider</label>
-                <select 
-                    value={settings.provider} 
-                    onChange={e => {
-                        const opt = providerOptions.find(p => p.label === e.target.value);
-                        setSettings({ ...settings, provider: e.target.value, baseUrl: opt?.defaultBase || '', model: opt?.defaultModel || '' });
-                    }}
-                >
-                    {providerOptions.map(p => (
-                        <option key={p.label} value={p.label}>{p.label}</option>
+            {!profileForm ? (
+                <>
+                    {config?.profiles.length === 0 && (
+                        <p style={{ color: 'var(--text-secondary)' }}>No model profiles yet. Add one to start chatting.</p>
+                    )}
+                    {config?.profiles.map((p: any) => (
+                        <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 0', borderBottom: '1px solid var(--border-color)' }}>
+                            <input type="radio" name="active-profile" checked={p.id === config.activeProfileId}
+                                onChange={() => window.electron?.setActiveProfile(p.id).then(setConfig)} />
+                            <div style={{ flexGrow: 1 }}>
+                                <div style={{ fontWeight: 600 }}>{p.name}{!p.hasKey && <span style={{ color: 'salmon', fontSize: '11px', marginLeft: '6px' }}>no key</span>}</div>
+                                <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{p.provider} · {p.model}</div>
+                            </div>
+                            <button className="glass-panel" style={{ padding: '4px 10px', cursor: 'pointer', color: 'var(--text-primary)' }}
+                                onClick={() => setProfileForm({ id: p.id, name: p.name, provider: p.provider, model: p.model, baseUrl: p.baseUrl, apiKey: '', hasKey: p.hasKey })}>
+                                Edit
+                            </button>
+                            <button className="glass-panel" style={{ padding: '4px 10px', cursor: 'pointer', color: 'salmon' }}
+                                onClick={() => window.electron?.deleteProfile(p.id).then(setConfig)}>
+                                Delete
+                            </button>
+                        </div>
                     ))}
-                </select>
-            </div>
-
-            <div>
-                <label>API Key</label>
-                <input 
-                    type="password" 
-                    value={settings.apiKey} 
-                    onChange={e => setSettings({ ...settings, apiKey: e.target.value })} 
-                    placeholder="Enter your API Key..."
-                />
-            </div>
-
-            <div>
-                <label>Model Name</label>
-                <input 
-                    type="text" 
-                    value={settings.model} 
-                    onChange={e => setSettings({ ...settings, model: e.target.value })} 
-                    placeholder="e.g. gpt-4o"
-                />
-            </div>
-
-            <div>
-                <label>Base URL (Optional)</label>
-                <input 
-                    type="text" 
-                    value={settings.baseUrl} 
-                    onChange={e => setSettings({ ...settings, baseUrl: e.target.value })} 
-                    placeholder="Override endpoint URL..."
-                />
-            </div>
-
-            <button 
-                onClick={handleSaveSettings}
-                style={{ 
-                    background: 'var(--accent-color)', 
-                    color: '#000', 
-                    border: 'none', 
-                    borderRadius: '8px', 
-                    padding: '10px',
-                    cursor: 'pointer',
-                    fontWeight: 600,
-                    marginTop: '10px'
-                }}
-            >
-                Save Preferences
-            </button>
+                    <button onClick={() => setProfileForm({ name: '', provider: 'OpenAI', model: 'gpt-4o', baseUrl: '', apiKey: '' })}
+                        style={{ background: 'var(--accent-color)', color: '#000', border: 'none', borderRadius: '8px', padding: '10px', cursor: 'pointer', fontWeight: 600, marginTop: '10px' }}>
+                        Add Profile
+                    </button>
+                </>
+            ) : (
+                <>
+                    <div>
+                        <label>Profile Name</label>
+                        <input type="text" value={profileForm.name} onChange={(e) => setProfileForm({ ...profileForm, name: e.target.value })} placeholder="e.g. GPT-4o (work)" />
+                    </div>
+                    <div>
+                        <label>Provider</label>
+                        <select value={profileForm.provider}
+                            onChange={(e) => {
+                                const opt = providerOptions.find((p) => p.label === e.target.value);
+                                setProfileForm(profileForm.id
+                                    ? { ...profileForm, provider: e.target.value } // editing: never clobber saved fields
+                                    : { ...profileForm, provider: e.target.value, baseUrl: opt?.defaultBase || '', model: opt?.defaultModel || '' });
+                            }}>
+                            {providerOptions.map((p) => <option key={p.label} value={p.label}>{p.label}</option>)}
+                        </select>
+                    </div>
+                    <div>
+                        <label>Model Name</label>
+                        <input type="text" value={profileForm.model} onChange={(e) => setProfileForm({ ...profileForm, model: e.target.value })} placeholder="e.g. gpt-4o" />
+                    </div>
+                    <div>
+                        <label>Base URL (Optional)</label>
+                        <input type="text" value={profileForm.baseUrl} onChange={(e) => setProfileForm({ ...profileForm, baseUrl: e.target.value })} placeholder="Override endpoint URL..." />
+                    </div>
+                    <div>
+                        <label>API Key</label>
+                        <input type="password" value={profileForm.apiKey} onChange={(e) => setProfileForm({ ...profileForm, apiKey: e.target.value })}
+                            placeholder={profileForm.hasKey ? '•••••••• (leave blank to keep)' : 'Enter your API Key...'} />
+                    </div>
+                    <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+                        <button className="glass-panel" style={{ padding: '10px', cursor: 'pointer', color: 'var(--text-primary)', flexGrow: 1 }} onClick={() => setProfileForm(null)}>Cancel</button>
+                        <button
+                            style={{ background: 'var(--accent-color)', color: '#000', border: 'none', borderRadius: '8px', padding: '10px', cursor: 'pointer', fontWeight: 600, flexGrow: 1 }}
+                            disabled={!profileForm.name.trim() || !profileForm.model.trim()}
+                            onClick={() => {
+                                const { apiKey, hasKey, ...profile } = profileForm;
+                                window.electron?.upsertProfile(profile, apiKey || undefined).then((c) => { setConfig(c); setProfileForm(null); });
+                            }}>
+                            Save Profile
+                        </button>
+                    </div>
+                </>
+            )}
           </div>
         </div>
       )}
