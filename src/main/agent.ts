@@ -38,6 +38,13 @@ function truncateOutput(text, limit = TOOL_OUTPUT_CHAR_LIMIT) {
     return `${text.slice(0, head)}\n[... truncated ${removed} chars ...]\n${text.slice(-tail)}`;
 }
 
+function resolveInWorkspace(workspace, relPath) {
+    const root = path.resolve(workspace);
+    const abs = path.resolve(root, relPath);
+    if (abs !== root && !abs.startsWith(root + path.sep)) return null;
+    return abs;
+}
+
 function sliceHistory(history) {
     let cutIndex = Math.max(0, history.length - MAX_HISTORY);
     while (cutIndex < history.length && history[cutIndex].role === 'tool') cutIndex++;
@@ -122,7 +129,12 @@ function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpaw
             execute: async ({ filePath, offset, limit }) => {
                 emit({ type: 'tool_call', name: 'read_file', arguments: JSON.stringify({ filePath, offset, limit }) });
                 try {
-                    const absPath = path.join(workspace, filePath);
+                    const absPath = resolveInWorkspace(workspace, filePath);
+                    if (!absPath) {
+                        const errMsg = `Error: path escapes the workspace: ${filePath}`;
+                        emit({ type: 'tool_result', name: 'read_file', result: errMsg });
+                        return errMsg;
+                    }
                     const content = await fs.promises.readFile(absPath, 'utf-8');
                     const lines = content.split('\n');
                     const total = lines.length;
@@ -160,9 +172,14 @@ function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpaw
             }),
             execute: async ({ filePath, content }) => {
                 emit({ type: 'tool_call', name: 'write_file', arguments: JSON.stringify({ filePath }) });
+                const absPath = resolveInWorkspace(workspace, filePath);
+                if (!absPath) {
+                    const errMsg = `Error: path escapes the workspace: ${filePath}`;
+                    emit({ type: 'tool_result', name: 'write_file', result: errMsg });
+                    return errMsg;
+                }
                 if (!await requestPermission('write_file', { filePath }, agentId)) return denied('write_file');
                 try {
-                    const absPath = path.join(workspace, filePath);
                     await fs.promises.mkdir(path.dirname(absPath), { recursive: true });
                     await fs.promises.writeFile(absPath, content, 'utf-8');
                     const res = `Successfully wrote to ${filePath}`;
@@ -184,9 +201,14 @@ function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpaw
             }),
             execute: async ({ filePath, oldString, newString }) => {
                 emit({ type: 'tool_call', name: 'edit_file', arguments: JSON.stringify({ filePath }) });
+                const absPath = resolveInWorkspace(workspace, filePath);
+                if (!absPath) {
+                    const errMsg = `Error: path escapes the workspace: ${filePath}`;
+                    emit({ type: 'tool_result', name: 'edit_file', result: errMsg });
+                    return errMsg;
+                }
                 if (!await requestPermission('edit_file', { filePath, oldString, newString }, agentId)) return denied('edit_file');
                 try {
-                    const absPath = path.join(workspace, filePath);
                     const content = await fs.promises.readFile(absPath, 'utf-8');
                     const occurrences = content.split(oldString).length - 1;
                     if (occurrences === 0) {
@@ -218,7 +240,12 @@ function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpaw
             execute: async ({ dirPath }) => {
                 emit({ type: 'tool_call', name: 'list_dir', arguments: JSON.stringify({ dirPath }) });
                 try {
-                    const absPath = path.join(workspace, dirPath);
+                    const absPath = resolveInWorkspace(workspace, dirPath);
+                    if (!absPath) {
+                        const errMsg = `Error: path escapes the workspace: ${dirPath}`;
+                        emit({ type: 'tool_result', name: 'list_dir', result: errMsg });
+                        return errMsg;
+                    }
                     const items = await fs.promises.readdir(absPath);
                     let res;
                     if (items.length === 0) res = 'Directory is empty.';
