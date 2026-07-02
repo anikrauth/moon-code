@@ -155,6 +155,35 @@ function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpaw
             }
         })
     };
+    if (includeSpawn) {
+        tools.spawn_agent = tool({
+            description: 'Delegate a self-contained task to a parallel subagent with its own tool access. The subagent cannot ask you questions — include all needed context in the task. Returns its plain-text findings. You may call spawn_agent multiple times in one step to run tasks in parallel.',
+            inputSchema: z.object({
+                task: z.string().describe('Complete, self-contained task description with all necessary context.'),
+            }),
+            execute: async ({ task }) => {
+                const subId = `sub-${++spawnState.counter}`;
+                emit({ type: 'tool_call', name: 'spawn_agent', arguments: JSON.stringify({ task }) });
+                const subSystemPrompt = `You are a Moon Agent subagent working autonomously in the workspace at ${workspace}. Complete the following task using your tools, then reply with concise plain-text findings. Do not ask questions; do not output JSON UI specs.
+${spawnState.projectMemory ? `\nPROJECT INSTRUCTIONS (from MOON.md in the workspace root — follow these):\n${spawnState.projectMemory}\n` : ''}`;
+                try {
+                    const subTools = makeTools({ workspace, onEvent, requestPermission, agentId: subId, includeSpawn: false, settings, spawnState });
+                    const { text } = await runAgentLoop({
+                        prompt: task, workspace, settings, history: [],
+                        onEvent, requestPermission, agentId: subId,
+                        tools: subTools, systemPrompt: subSystemPrompt, emitText: false,
+                    });
+                    const res = text?.trim() ? text : 'Subagent finished with no output.';
+                    onEvent({ type: 'tool_result', name: 'spawn_agent', agent: agentId, result: res });
+                    return res;
+                } catch (e: any) {
+                    const errMsg = `Error: subagent failed: ${e.message}`;
+                    onEvent({ type: 'tool_result', name: 'spawn_agent', agent: agentId, result: errMsg });
+                    return errMsg;
+                }
+            }
+        });
+    }
     return tools;
 }
 
