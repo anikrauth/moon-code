@@ -56,7 +56,7 @@ function sliceHistory(history) {
 // tail of large capped tool results can exceed HISTORY_TOKEN_BUDGET and re-trigger
 // compaction on consecutive turns. The Math.max(2, ...) cut floor guarantees at
 // least two messages are summarized per pass, so this converges and never loops.
-async function compactHistory(history, settings, onEvent) {
+async function compactHistory(history, settings, onEvent, abortSignal) {
     if (!history || (history.length <= MAX_HISTORY && historyTokens(history) <= HISTORY_TOKEN_BUDGET)) return history;
     let cut = Math.max(2, history.length - KEEP_RECENT);
     while (cut < history.length && history[cut].role === 'tool') cut++;
@@ -73,6 +73,7 @@ async function compactHistory(history, settings, onEvent) {
             system: 'Summarize the conversation compactly. Preserve file paths, decisions made, code changes, and unresolved tasks.',
             prompt: `Conversation to summarize:\n${transcript}`,
             maxRetries: 1,
+            abortSignal,
         });
         return [{ role: 'user', content: `[Earlier conversation summary]\n${text}` }, ...recent];
     } catch {
@@ -331,7 +332,7 @@ export async function handlePrompt(
     abortSignal?: AbortSignal,
 ) {
     try {
-        history = await compactHistory(history, settings, onEvent);
+        history = await compactHistory(history, settings, onEvent, abortSignal);
 
         const projectMemory = await loadProjectMemory(workspace);
 
