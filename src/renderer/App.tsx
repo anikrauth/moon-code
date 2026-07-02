@@ -56,23 +56,24 @@ function ToolActivity({ tool }: { tool: any }) {
   }
   if (preview.length > 60) preview = `${preview.slice(0, 60)}…`;
   const result = tool.result;
-  const isError = !!result && (result.startsWith('Error:') || result === 'User denied permission for this action.' || result === 'aborted');
-  const summary = result ? (result.split('\n').find((l: string) => l.trim()) ?? '').slice(0, 80) : null;
+  const hasResult = tool.result != null;
+  const isError = hasResult && (result.startsWith('Error:') || result === 'User denied permission for this action.' || result === 'aborted');
+  const summary = hasResult ? ((result.split('\n').find((l: string) => l.trim()) ?? '').slice(0, 80) || '(no output)') : null;
   return (
     <div className="activity-item">
       <div
-        className={`activity-line ${result ? 'activity-clickable' : ''}`}
-        onClick={() => result && setExpanded((e) => !e)}
-        title={result ? (expanded ? 'Collapse output' : 'Expand output') : undefined}
+        className={`activity-line ${hasResult ? 'activity-clickable' : ''}`}
+        onClick={() => hasResult && setExpanded((e) => !e)}
+        title={hasResult ? (expanded ? 'Collapse output' : 'Expand output') : undefined}
       >
-        <span className={`activity-marker ${result ? '' : 'activity-pending'}`}>⏺</span>
+        <span className={`activity-marker ${hasResult ? '' : 'activity-pending'}`}>⏺</span>
         {tool.agent && tool.agent !== 'main' && <span className="agent-badge">{tool.agent}</span>}
         <span className="activity-label"><strong>{tool.name}</strong>{preview ? `(${preview})` : ''}</span>
       </div>
       {summary != null && !expanded && (
         <div className={`activity-result-summary ${isError ? 'activity-error' : ''}`}>⎿ {summary}</div>
       )}
-      {expanded && result && <pre className="activity-result-full">{result}</pre>}
+      {expanded && hasResult && <pre className="activity-result-full">{result}</pre>}
     </div>
   );
 }
