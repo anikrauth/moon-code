@@ -320,7 +320,7 @@ export default function App() {
       : 'Ask Moon Agent anything. Shift+Enter for new line.';
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '20px', paddingTop: '40px', position: 'relative' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '20px', paddingTop: '40px', position: 'relative', boxSizing: 'border-box' }}>
       
       {/* Settings Modal */}
       {showSettings && (
