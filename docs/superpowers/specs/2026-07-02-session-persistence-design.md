@@ -52,6 +52,7 @@ Handlers wrap store calls in try/catch (`console.error`) and return a safe value
 - `messages` persist exactly as rendered (including `toolCalls` with capped results) — reopening a session restores the full activity timeline.
 - `history` persists the model messages verbatim; next turn compaction applies as usual.
 - Sessions are per-snapshot overwrites — no incremental append; a crashed/cancelled turn simply isn't saved (last completed turn wins).
+- Reopened sessions continue under the currently active model profile; the originating profile is not stored.
 
 ## Error handling
 

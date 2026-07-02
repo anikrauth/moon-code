@@ -88,3 +88,17 @@ test('delete removes file and index entry; unknown id is a no-op', (t) => {
   assert.deepStrictEqual(s.listSessions(), []);
   assert.ok(!fs.existsSync(path.join(dir, `${id}.json`)));
 });
+
+test('traversal-shaped ids are rejected', (t) => {
+  const dir = tmpDir(t);
+  const s = createSessionStore({ dir });
+  // plant a victim file one level up (sibling of sessions dir, like config.json)
+  const victim = path.join(path.dirname(dir), 'config.json');
+  fs.mkdirSync(path.dirname(dir), { recursive: true });
+  fs.writeFileSync(victim, '{"secret":true}');
+  s.saveSession(snap());
+  s.deleteSession('../config');
+  assert.ok(fs.existsSync(victim), 'file outside sessions dir untouched');
+  assert.strictEqual(s.getSession('../config'), null);
+  assert.strictEqual(s.listSessions().length, 1);
+});

@@ -3,6 +3,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 
+const VALID_ID = /^s-[0-9a-fA-F-]+$/;
+
 export function createSessionStore({ dir }) {
     const indexFile = path.join(dir, 'index.json');
 
@@ -28,9 +30,12 @@ export function createSessionStore({ dir }) {
     }
 
     function getSessionById(id) {
+        if (!VALID_ID.test(id)) return null;
         try {
             const parsed = JSON.parse(fs.readFileSync(path.join(dir, `${id}.json`), 'utf-8'));
-            return parsed && parsed.id === id ? parsed : null;
+            if (!parsed || parsed.id !== id) return null;
+            if (!Array.isArray(parsed.messages) || !Array.isArray(parsed.history)) return null;
+            return parsed;
         } catch {
             return null;
         }
@@ -47,6 +52,7 @@ export function createSessionStore({ dir }) {
             const sessionId = existing ? existing.id : `s-${randomUUID()}`;
             const session = {
                 id: sessionId,
+                version: 1,
                 title,
                 workspace,
                 createdAt: existing ? existing.createdAt : now,
@@ -62,6 +68,7 @@ export function createSessionStore({ dir }) {
         },
 
         deleteSession(id) {
+            if (!VALID_ID.test(id)) return;
             try {
                 fs.unlinkSync(path.join(dir, `${id}.json`));
             } catch {

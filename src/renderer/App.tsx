@@ -153,6 +153,7 @@ export default function App() {
      otherwise start its save before the first save's returned id has been
      adopted, so both would read sessionId: null and create duplicates. */
   const saveChainRef = useRef<Promise<void>>(Promise.resolve());
+  const sessionEpochRef = useRef(0);
 
   useEffect(() => {
     // Listen for events from main process (only available inside Electron)
@@ -167,6 +168,7 @@ export default function App() {
           const snap = sessionSnapshotRef.current;
           const firstUser = snap.messages.find((m: any) => m.role === 'user');
           if (firstUser && snap.workspace) {
+            const epoch = sessionEpochRef.current;
             const payload = {
               title: firstUser.content.trim().slice(0, 60),
               workspace: snap.workspace,
@@ -179,7 +181,12 @@ export default function App() {
                 // already written its adopted id into the ref synchronously,
                 // so this save updates that session instead of duplicating it.
                 const id = await window.electron?.saveSession({ ...payload, id: sessionSnapshotRef.current.sessionId ?? undefined });
-                if (id) {
+                // The save itself still writes — that's correct, the completed
+                // turn belongs to the old session — only ADOPTION into current
+                // UI state is skipped if a New Chat / session switch happened
+                // after this save was enqueued (stale id would otherwise leak
+                // into the fresh chat and get silently overwritten next turn).
+                if (id && epoch === sessionEpochRef.current) {
                   sessionSnapshotRef.current.sessionId = id;
                   setCurrentSessionId(id);
                 }
@@ -275,6 +282,7 @@ export default function App() {
   }, []);
 
   const startNewChat = () => {
+    sessionEpochRef.current += 1;
     setMessages([]);
     setHistory(undefined);
     setCurrentSessionId(null);
@@ -327,6 +335,7 @@ export default function App() {
   const handleSelectSession = async (id: string) => {
     const s = await window.electron?.getSession(id);
     if (!s) return;
+    sessionEpochRef.current += 1;
     setWorkspace(s.workspace);
     setMessages(s.messages ?? []);
     setHistory(s.history ?? undefined);
@@ -337,7 +346,10 @@ export default function App() {
   const handleDeleteSession = async (id: string) => {
     const list = await window.electron?.deleteSession(id);
     setSessionList(list ?? []);
-    if (id === currentSessionId) setCurrentSessionId(null);
+    if (id === currentSessionId) {
+      sessionEpochRef.current += 1;
+      setCurrentSessionId(null);
+    }
   };
 
   /* ---- MCP handlers ---- */
