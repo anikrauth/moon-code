@@ -378,12 +378,17 @@ export default function App() {
         if (!activeProfile?.hasKey) { appendLocalNote('No active model profile with an API key — configure one in Settings.'); return; }
         if (!history || history.length <= 2) { appendLocalNote('Nothing to compact yet.'); return; }
         const before = history.length;
-        const res = await window.electron?.compactNow(config.activeProfileId, history);
-        if (res?.ok) {
-          setHistory(res.history);
-          appendLocalNote(`History compacted: ${before} → ${res.history.length} messages.`);
-        } else {
-          appendLocalNote(`Compaction failed${res?.error ? `: ${res.error}` : '.'}`);
+        setIsTyping(true);
+        try {
+          const res = await window.electron?.compactNow(config.activeProfileId, history);
+          if (res?.ok) {
+            setHistory(res.history);
+            appendLocalNote(`History compacted: ${before} → ${res.history.length} messages.`);
+          } else {
+            appendLocalNote(`Compaction failed${res?.error ? `: ${res.error}` : '.'}`);
+          }
+        } finally {
+          setIsTyping(false);
         }
       } },
     { name: 'model', description: 'Switch model profile: /model <name>', run: (arg?: string) => {
@@ -777,7 +782,8 @@ export default function App() {
                             padding: '12px 16px',
                             borderRadius: '12px',
                             maxWidth: '80%',
-                            lineHeight: '1.5'
+                            lineHeight: '1.5',
+                            whiteSpace: 'pre-wrap'
                         }}>
                             {msg.role === 'assistant' ? (
                                 <AssistantContent content={msg.content} streaming={isTyping && i === messages.length - 1} />
