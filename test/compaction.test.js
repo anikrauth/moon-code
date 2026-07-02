@@ -49,3 +49,28 @@ test('summarize failure falls back to slice, turn still completes', async (t) =>
   const mainReq = server.requests.find(b => b.tools);
   assert.strictEqual(mainReq.messages.filter(m => m.role !== 'system').length, 21); // sliced 20 + new prompt
 });
+
+test('few huge messages trigger token-based compaction', async (t) => {
+  const server = await startServer((body) =>
+    body.tools ? textChunks('answer') : textChunks('BIG-SUMMARY'));
+  t.after(() => server.close());
+  const huge = Array.from({ length: 6 }, (_, i) => ({
+    role: i % 2 ? 'assistant' : 'user', content: `turn ${i} ` + 'x'.repeat(30000) }));
+  const events = await run(server, huge);
+  const summarizeReq = server.requests.find((b) => !b.tools);
+  assert.ok(summarizeReq, 'token budget exceeded -> summarize call made');
+  const mainReq = server.requests.find((b) => b.tools);
+  const nonSystem = mainReq.messages.filter((m) => m.role !== 'system');
+  assert.match(nonSystem[0].content, /^\[Earlier conversation summary\]\nBIG-SUMMARY/);
+  assert.strictEqual(events.filter((e) => e.type === 'error').length, 0);
+});
+
+test('small short history skips compaction entirely', async (t) => {
+  const server = await startServer(() => textChunks('answer'));
+  t.after(() => server.close());
+  const small = Array.from({ length: 6 }, (_, i) => ({
+    role: i % 2 ? 'assistant' : 'user', content: `turn ${i}` }));
+  await run(server, small);
+  assert.strictEqual(server.requests.length, 1);
+  assert.ok(server.requests[0].tools, 'only the main call, no summarize');
+});

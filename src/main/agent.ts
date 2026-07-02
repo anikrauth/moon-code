@@ -18,6 +18,10 @@ import { catalog } from '../shared/uiCatalog';
 
 const MAX_HISTORY = 20;
 const KEEP_RECENT = 8;
+const HISTORY_TOKEN_BUDGET = 40000;
+const estimateTokens = (s) => Math.ceil(s.length / 4);
+const historyTokens = (history) => history.reduce((sum, m) =>
+    sum + estimateTokens(typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '')), 0);
 const TRANSCRIPT_CHAR_LIMIT = 30000;
 const MEMORY_FILE = 'MOON.md';
 const MEMORY_CHAR_LIMIT = 12000;
@@ -41,8 +45,8 @@ function sliceHistory(history) {
 }
 
 async function compactHistory(history, settings, onEvent) {
-    if (!history || history.length <= MAX_HISTORY) return history;
-    let cut = history.length - KEEP_RECENT;
+    if (!history || (history.length <= MAX_HISTORY && historyTokens(history) <= HISTORY_TOKEN_BUDGET)) return history;
+    let cut = Math.max(2, history.length - KEEP_RECENT);
     while (cut < history.length && history[cut].role === 'tool') cut++;
     const old = history.slice(0, cut);
     const recent = history.slice(cut);
