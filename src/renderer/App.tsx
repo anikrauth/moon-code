@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useEffect, useRef } from 'react';
-import { FolderOpen, Settings, Bot, X, Plus, History } from 'lucide-react';
+import { FolderOpen, Settings, X, Plus, History } from 'lucide-react';
 import RichInput, { SkillItem } from './RichInput';
 import SkillsPanel from './SkillsPanel';
 import { SKILL_CATALOG } from '../shared/skillCatalog';
@@ -711,9 +711,7 @@ export default function App() {
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <div style={{ background: 'var(--accent-color)', borderRadius: '50%', padding: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <Bot size={20} color="#fff" />
-            </div>
+            <img src="./moon-logo.png" width={28} height={28} alt="Moon Agent" />
             <h1 style={{ margin: 0, fontSize: '18px', fontWeight: 600 }}>Moon Agent</h1>
         </div>
         

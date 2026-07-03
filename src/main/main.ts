@@ -7,13 +7,18 @@ import { createSessionStore } from './sessionStore';
 import { createMcpManager } from './mcpManager';
 import { SKILL_CATALOG } from '../shared/skillCatalog';
 
+app.name = 'Moon Agent';
+
 let mainWindow: BrowserWindow | null = null;
+
+const appIconPath = path.join(__dirname, '../../build/icon.png');
 
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1000,
     height: 800,
     titleBarStyle: 'hiddenInset',
+    icon: appIconPath,
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),
       nodeIntegration: false,
@@ -33,6 +38,11 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  // Packaged builds get their icon from the electron-builder icns; this path
+  // only exists in the repo checkout, so setting it there would throw.
+  if (process.platform === 'darwin' && !app.isPackaged) {
+    app.dock.setIcon(appIconPath);
+  }
   createWindow();
 
   ipcMain.handle('dialog:openDirectory', async () => {
