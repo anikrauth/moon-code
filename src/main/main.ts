@@ -137,7 +137,7 @@ app.whenReady().then(() => {
     pendingPermissions.clear();
   };
 
-  ipcMain.on('agent:prompt', (event, prompt: string, workspace: string, profileId: string, history: any) => {
+  ipcMain.on('agent:prompt', (event, prompt: string, workspace: string, profileId: string, history: any, meta?: { lastInputTokens?: number }) => {
     const settings = configStore.resolveSettings(profileId);
     if (!settings) {
       event.reply('agent:event', { type: 'error', agent: 'main', content: 'Selected model profile has no API key. Open Settings and configure one.' });
@@ -169,7 +169,7 @@ app.whenReady().then(() => {
         : '';
     handlePrompt(prompt, workspace, settings, history, (agentEvent) => {
       event.reply('agent:event', agentEvent);
-    }, requestPermission, activeTurn.signal, mcpManager.getAgentTools(), skillsText);
+    }, requestPermission, activeTurn.signal, mcpManager.getAgentTools(), skillsText, meta);
   });
 
   ipcMain.on('agent:permission-response', (_event, id: string, allow: boolean, alwaysAllow: boolean) => {

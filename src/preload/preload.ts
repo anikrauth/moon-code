@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('electron', {
   selectFolder: () => ipcRenderer.invoke('dialog:openDirectory'),
-  sendPrompt: (prompt: string, workspace: string, profileId: string, history: any) => ipcRenderer.send('agent:prompt', prompt, workspace, profileId, history),
+  sendPrompt: (prompt: string, workspace: string, profileId: string, history: any, meta?: { lastInputTokens?: number }) => ipcRenderer.send('agent:prompt', prompt, workspace, profileId, history, meta),
   respondPermission: (id: string, allow: boolean, alwaysAllow: boolean) => ipcRenderer.send('agent:permission-response', id, allow, alwaysAllow),
   cancelPrompt: () => ipcRenderer.send('agent:cancel'),
   onAgentEvent: (callback: (event: any) => void) => {
