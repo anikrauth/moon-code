@@ -46,6 +46,10 @@ export default function Sidebar(props: any) {
               invokedSkillIds={props.invokedSkillIds}
               onInvokeSkill={props.onInvokeSkill}
               onCreateSkill={props.onCreateSkill}
+              onInstallSkill={props.onInstallSkill}
+              onInstallMarketplaceSkill={props.onInstallMarketplaceSkill}
+              onInstallSkillFromUrl={props.onInstallSkillFromUrl}
+              skillInstallKey={props.skillInstallKey}
             />
           )}
           {activeTab === 'mcp' && (

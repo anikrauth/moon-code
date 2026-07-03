@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('electron', {
   selectFolder: () => ipcRenderer.invoke('dialog:openDirectory'),
+  selectSkill: () => ipcRenderer.invoke('dialog:openSkill'),
   sendPrompt: (prompt: string, workspace: string, profileId: string, history: any, meta?: { lastInputTokens?: number; skillContent?: string }) => ipcRenderer.send('agent:prompt', prompt, workspace, profileId, history, meta),
   respondPermission: (id: string, allow: boolean, alwaysAllow: boolean) => ipcRenderer.send('agent:permission-response', id, allow, alwaysAllow),
   cancelPrompt: () => ipcRenderer.send('agent:cancel'),
@@ -32,5 +33,11 @@ contextBridge.exposeInMainWorld('electron', {
   discoverSkills: (workspace: string) => ipcRenderer.invoke('skills:discover', workspace),
   readSkill: (id: string, workspace: string) => ipcRenderer.invoke('skills:read', id, workspace),
   createSkill: (name: string, content: string, scope: 'project' | 'personal', workspace: string) =>
-    ipcRenderer.invoke('skills:create', name, content, scope, workspace),
+    ipcRenderer.invoke('skills:create', name, content, scope, workspace) as Promise<{ success: boolean; skill?: any; error?: string }>,
+  installSkill: (sourcePath: string, scope: 'project' | 'personal', workspace: string) =>
+    ipcRenderer.invoke('skills:install', sourcePath, scope, workspace) as Promise<{ success: boolean; skill?: any; error?: string }>,
+  installMarketplaceSkill: (skillId: string, workspace: string) =>
+    ipcRenderer.invoke('skills:installMarketplace', skillId, workspace) as Promise<{ success: boolean; skill?: any; error?: string }>,
+  installSkillFromUrl: (url: string, workspace: string) =>
+    ipcRenderer.invoke('skills:installFromUrl', url, workspace) as Promise<{ success: boolean; skill?: any; error?: string }>,
 });

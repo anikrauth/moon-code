@@ -44,6 +44,7 @@ interface RichInputProps {
   busy?: boolean;
   onStop?: () => void;
   commands?: { name: string; description: string; run: (arg?: string) => void }[];
+  onUnknownCommand?: (name: string, arg?: string) => void;
   /** Context window fullness (null until there is a conversation) */
   contextInfo?: {
     lastInputTokens: number;
@@ -78,6 +79,7 @@ export default function RichInput({
   busy = false,
   onStop,
   commands = [],
+  onUnknownCommand,
   contextInfo = null,
   capabilities = { tools: true, vision: true },
 }: RichInputProps) {
@@ -112,6 +114,24 @@ export default function RichInput({
     cmd.run(arg);
   };
 
+  const tryRunUnknownCommand = () => {
+    if (!value.startsWith('/')) return false;
+    const sp = value.indexOf(' ');
+    const name = sp >= 0 ? value.slice(1, sp).trim() : value.slice(1).trim();
+    const arg = sp >= 0 ? value.slice(sp + 1).trim() || undefined : undefined;
+    const match = commands.find((c) => c.name === name);
+    if (match) {
+      runCommand(match);
+      return true;
+    }
+    if (onUnknownCommand && name) {
+      onChange('');
+      onUnknownCommand(name, arg);
+      return true;
+    }
+    return false;
+  };
+
   /* Keyboard */
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (cmdMatches.length > 0) {
@@ -120,7 +140,11 @@ export default function RichInput({
       if (e.key === 'Escape') { e.preventDefault(); onChange(''); return; }
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); runCommand(cmdMatches[Math.min(cmdIndex, cmdMatches.length - 1)]); return; }
     }
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      if (value.startsWith('/') && tryRunUnknownCommand()) return;
+      onSend();
+    }
   };
 
   const connectedCount = mcpServers.filter((s) => s.status === 'connected').length;

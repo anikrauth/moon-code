@@ -1,5 +1,7 @@
 // @ts-nocheck
 import { app, BrowserWindow, ipcMain, dialog, safeStorage } from 'electron';
+import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { handlePrompt, forceCompact } from './agent';
 import { createConfigStore } from './configStore';
@@ -58,6 +60,16 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('dialog:openSkill', async () => {
+    if (!mainWindow) return null;
+    const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openFile', 'openDirectory'],
+      filters: [{ name: 'Skill files', extensions: ['md'] }, { name: 'All files', extensions: ['*'] }],
+    });
+    if (canceled) return null;
+    return filePaths[0];
+  });
+
   const configStore = createConfigStore({ dir: app.getPath('userData'), safeStorage });
 
   const configHandler = (fn) => (_event, ...args) => {
@@ -83,14 +95,114 @@ app.whenReady().then(() => {
   ipcMain.handle('skills:create', (_e, name: string, content: string, scope: 'project' | 'personal', workspace: string) => {
     try {
       const base = scope === 'personal'
-        ? path.join(require('os').homedir(), '.moon', 'skills')
+        ? path.join(os.homedir(), '.moon', 'skills')
         : path.join(workspace, '.moon', 'skills');
       const dir = path.join(base, name);
-      require('fs').mkdirSync(dir, { recursive: true });
-      require('fs').writeFileSync(path.join(dir, 'SKILL.md'), content, 'utf-8');
-      return scanSkills(workspace).find((s) => s.id === name) ?? null;
-    } catch (e) { console.error('[skills]', e); return null; }
+      if (fs.existsSync(dir)) {
+        throw new Error(`Skill "${name}" already exists.`);
+      }
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'SKILL.md'), content, 'utf-8');
+      const skill = scanSkills(workspace).find((s) => s.id === name) ?? null;
+      return { success: true, skill };
+    } catch (e: any) { console.error('[skills]', e); return { success: false, error: e.message }; }
   });
+
+  ipcMain.handle('skills:install', async (_e, sourcePath: string, scope: 'project' | 'personal', workspace: string) => {
+    try {
+      const stat = fs.statSync(sourcePath);
+      let skillFile: string;
+      let targetName: string;
+      if (stat.isDirectory()) {
+        skillFile = path.join(sourcePath, 'SKILL.md');
+        if (!fs.existsSync(skillFile)) throw new Error('Selected directory does not contain a SKILL.md file.');
+        targetName = path.basename(sourcePath);
+      } else {
+        skillFile = sourcePath;
+        if (path.basename(sourcePath) !== 'SKILL.md') throw new Error('Selected file must be named SKILL.md.');
+        targetName = path.basename(path.dirname(sourcePath));
+        if (!targetName || targetName === '.') targetName = 'installed-skill';
+      }
+      const base = scope === 'personal'
+        ? path.join(os.homedir(), '.moon', 'skills')
+        : path.join(workspace, '.moon', 'skills');
+      const targetDir = path.join(base, targetName);
+      if (fs.existsSync(targetDir)) throw new Error(`Skill "${targetName}" already exists.`);
+      fs.mkdirSync(targetDir, { recursive: true });
+      fs.copyFileSync(skillFile, path.join(targetDir, 'SKILL.md'));
+      const skill = scanSkills(workspace).find((s) => s.id === targetName) ?? null;
+      return { success: true, skill };
+    } catch (e: any) { console.error('[skills]', e); return { success: false, error: e.message }; }
+  });
+
+  ipcMain.handle('skills:installMarketplace', async (_e, skillId: string, workspace: string) => {
+    try {
+      const { SKILL_MARKETPLACE } = require('../shared/skillMarketplace');
+      const entry = SKILL_MARKETPLACE.find((s: any) => s.id === skillId);
+      if (!entry) throw new Error(`Marketplace skill "${skillId}" not found.`);
+      if (entry.source === 'bundled') {
+        const bundledPath = path.join(app.getAppPath(), entry.bundledPath);
+        if (!fs.existsSync(bundledPath)) {
+          // Fallback for development when running from source without a packaged app path
+          const devPath = path.join(__dirname, '..', '..', entry.bundledPath);
+          if (fs.existsSync(devPath)) {
+            const skill = copySkillToPersonal(devPath, skillId, workspace);
+            return { success: true, skill };
+          }
+          throw new Error(`Bundled skill file missing: ${bundledPath}`);
+        }
+        const skill = copySkillToPersonal(bundledPath, skillId, workspace);
+        return { success: true, skill };
+      }
+      throw new Error(`Unsupported marketplace source: ${entry.source}`);
+    } catch (e: any) { console.error('[skills]', e); return { success: false, error: e.message }; }
+  });
+
+  ipcMain.handle('skills:installFromUrl', async (_e, url: string, workspace: string) => {
+    try {
+      if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) {
+        throw new Error('URL must start with http:// or https://');
+      }
+      const res = await fetch(url, { redirect: 'follow' });
+      if (!res.ok) throw new Error(`Download failed: ${res.status} ${res.statusText}`);
+      const content = await res.text();
+      if (!content.trim().startsWith('---')) throw new Error('Downloaded file does not look like a SKILL.md (missing frontmatter).');
+      const id = extractSkillId(content, url);
+      const base = path.join(os.homedir(), '.moon', 'skills');
+      const targetDir = path.join(base, id);
+      if (fs.existsSync(targetDir)) throw new Error(`Skill "${id}" already exists.`);
+      fs.mkdirSync(targetDir, { recursive: true });
+      fs.writeFileSync(path.join(targetDir, 'SKILL.md'), content, 'utf-8');
+      const skill = scanSkills(workspace).find((s) => s.id === id) ?? null;
+      return { success: true, skill };
+    } catch (e: any) { console.error('[skills]', e); return { success: false, error: e.message }; }
+  });
+
+  function extractSkillId(content: string, url: string): string {
+    const nameMatch = content.match(/^name:\s*(.+)$/m);
+    if (nameMatch) {
+      const id = nameMatch[1].trim().replace(/^["']|["']$/g, '');
+      if (id) return id;
+    }
+    try {
+      const u = new URL(url);
+      const parts = u.pathname.split('/').filter(Boolean);
+      const last = parts[parts.length - 1] ?? '';
+      if (last && last !== 'SKILL.md') return last.replace(/\.md$/i, '');
+      const parent = parts[parts.length - 2] ?? '';
+      if (parent) return parent;
+    } catch { /* ignore */ }
+    return 'installed-skill';
+  }
+
+  function copySkillToPersonal(skillFile: string, targetName: string, workspace: string) {
+    const base = path.join(os.homedir(), '.moon', 'skills');
+    const targetDir = path.join(base, targetName);
+    if (fs.existsSync(targetDir)) throw new Error(`Skill "${targetName}" already exists.`);
+    fs.mkdirSync(targetDir, { recursive: true });
+    fs.copyFileSync(skillFile, path.join(targetDir, 'SKILL.md'));
+    return scanSkills(workspace).find((s) => s.id === targetName) ?? null;
+  }
 
   const mcpManager = createMcpManager({
       getServer: (id) => configStore.getRedacted().mcpServers.find((s) => s.id === id),
@@ -190,14 +302,18 @@ app.whenReady().then(() => {
         ? 'ACTIVE SKILLS — follow these working practices:\n\n' + activeSkills.map((s) => `${s.name}:\n${s.instructions}`).join('\n\n')
         : '';
     const discovered = scanSkills(workspace);
-    const invocableSkills = discovered.filter((s) => s.userInvocable && !s.disableModelInvocation);
+    const invocableSkills = discovered.filter((s) => !s.disableModelInvocation);
+    // Progressive disclosure (Claude Code / Codex style): the model only sees
+    // id + description up front. Full instructions are loaded on demand via
+    // the `skill` tool (see agent.ts), not inlined into the prompt.
     const catalogText = invocableSkills.length
-        ? 'AVAILABLE SKILLS — invoke with /skill-name or use when relevant:\n' + invocableSkills.map((s) => `- ${s.id}: ${s.description}`).join('\n')
+        ? 'AVAILABLE SKILLS — call the `skill` tool with the id to load full instructions before starting matching work:\n' + invocableSkills.map((s) => `- ${s.id}: ${s.description}`).join('\n')
         : '';
     const skillsText = [bundledSkillsText, catalogText].filter(Boolean).join('\n\n');
+    const skillsCatalog = invocableSkills.map((s) => ({ id: s.id, description: s.description, content: s.content }));
     handlePrompt(prompt, workspace, settings, history, (agentEvent) => {
       event.reply('agent:event', agentEvent);
-    }, requestPermission, activeTurn.signal, mcpManager.getAgentTools(), skillsText, meta);
+    }, requestPermission, activeTurn.signal, mcpManager.getAgentTools(), skillsText, meta, skillsCatalog);
   });
 
   ipcMain.on('agent:permission-response', (_event, id: string, allow: boolean, alwaysAllow: boolean) => {
