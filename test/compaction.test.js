@@ -91,3 +91,13 @@ test('small short history skips compaction entirely', async (t) => {
   assert.strictEqual(server.requests.length, 1);
   assert.ok(server.requests[0].tools, 'only the main call, no summarize');
 });
+
+test('huge context window override: same huge history does not compact', async (t) => {
+  const server = await startServer(() => textChunks('answer'));
+  t.after(() => server.close());
+  const huge = Array.from({ length: 6 }, (_, i) => ({
+    role: i % 2 ? 'assistant' : 'user', content: `turn ${i} ` + 'x'.repeat(30000) }));
+  await run(server, huge, { contextWindow: 2000000 });
+  assert.strictEqual(server.requests.length, 1);
+  assert.ok(server.requests[0].tools, 'only the main call, no summarize');
+});

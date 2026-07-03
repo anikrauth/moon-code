@@ -102,3 +102,15 @@ test('traversal-shaped ids are rejected', (t) => {
   assert.strictEqual(s.getSession('../config'), null);
   assert.strictEqual(s.listSessions().length, 1);
 });
+
+test('usage snapshot round-trips; absent usage stored as null', (t) => {
+  const s = createSessionStore({ dir: tmpDir(t) });
+  const usage = {
+    context: { lastInputTokens: 1000, lastOutputTokens: 50, contextWindow: 128000, maxOutputTokens: 4096, pct: 0.008, estimated: false },
+    session: { inputTokens: 1000, outputTokens: 50, cachedInputTokens: 200, turns: 1 },
+  };
+  const id = s.saveSession(snap({ usage }));
+  assert.deepStrictEqual(s.getSession(id).usage, usage);
+  const id2 = s.saveSession(snap());
+  assert.strictEqual(s.getSession(id2).usage, null);
+});
