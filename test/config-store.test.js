@@ -110,3 +110,43 @@ test('encryption-unavailable fallback stores base64 with enc:false and still res
   assert.strictEqual(Buffer.from(raw.profiles[0].apiKeyEnc, 'base64').toString('utf-8'), 'plain-key');
   assert.deepStrictEqual(s.resolveSettings(id), { apiKey: 'plain-key', model: 'a', baseUrl: '' });
 });
+
+test('limit overrides round-trip through upsert, redaction, and resolveSettings', (t) => {
+  const dir = tmpDir(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const s1 = mkStore(dir);
+  const id = s1.upsertProfile(
+    { name: 'GPT', provider: 'OpenAI', model: 'gpt-4o', baseUrl: '', contextWindow: 64000, maxOutputTokens: 2048 },
+    'key-a'
+  );
+  const red = s1.getRedacted();
+  assert.strictEqual(red.profiles[0].contextWindow, 64000);
+  assert.strictEqual(red.profiles[0].maxOutputTokens, 2048);
+  const s2 = mkStore(dir); // survives reload
+  assert.deepStrictEqual(s2.resolveSettings(id), {
+    apiKey: 'key-a', model: 'gpt-4o', baseUrl: '', contextWindow: 64000, maxOutputTokens: 2048,
+  });
+});
+
+test('absent or garbage limit overrides stored as null and omitted from resolveSettings', (t) => {
+  const dir = tmpDir(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const s = mkStore(dir);
+  const id = s.upsertProfile(
+    { name: 'GPT', provider: 'OpenAI', model: 'gpt-4o', baseUrl: '', contextWindow: 'lots', maxOutputTokens: -3 },
+    'k'
+  );
+  assert.strictEqual(s.getRedacted().profiles[0].contextWindow, null);
+  assert.strictEqual(s.getRedacted().profiles[0].maxOutputTokens, null);
+  assert.deepStrictEqual(s.resolveSettings(id), { apiKey: 'k', model: 'gpt-4o', baseUrl: '' });
+});
+
+test('editing a profile without touching overrides re-sends and preserves them; string numbers coerce', (t) => {
+  const dir = tmpDir(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const s = mkStore(dir);
+  const id = s.upsertProfile(
+    { name: 'A', provider: 'OpenAI', model: 'gpt-4o', baseUrl: '', contextWindow: '32000' },
+    'k'
+  );
+  assert.strictEqual(s.getRedacted().profiles[0].contextWindow, 32000); // string coerced
+  s.upsertProfile({ id, name: 'A2', provider: 'OpenAI', model: 'gpt-4o', baseUrl: '', contextWindow: 32000 });
+  assert.deepStrictEqual(s.resolveSettings(id), { apiKey: 'k', model: 'gpt-4o', baseUrl: '', contextWindow: 32000 });
+});

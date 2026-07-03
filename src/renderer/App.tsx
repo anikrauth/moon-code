@@ -4,6 +4,7 @@ import { FolderOpen, Settings, X, Plus, History } from 'lucide-react';
 import RichInput, { SkillItem } from './RichInput';
 import SkillsPanel from './SkillsPanel';
 import { SKILL_CATALOG } from '../shared/skillCatalog';
+import { resolveLimits } from '../shared/modelLimits';
 import McpPanel from './McpPanel';
 import SessionsPanel from './SessionsPanel';
 import { JSONUIProvider, Renderer } from '@json-render/react';
@@ -476,7 +477,7 @@ export default function App() {
                       <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{p.provider} · {p.model}</div>
                     </div>
                     <button className="glass-panel" style={{ padding: '4px 10px', cursor: 'pointer', color: 'var(--text-primary)' }}
-                      onClick={() => setProfileForm({ id: p.id, name: p.name, provider: p.provider, model: p.model, baseUrl: p.baseUrl, apiKey: '', hasKey: p.hasKey })}>
+                      onClick={() => setProfileForm({ id: p.id, name: p.name, provider: p.provider, model: p.model, baseUrl: p.baseUrl, apiKey: '', hasKey: p.hasKey, contextWindow: p.contextWindow ?? '', maxOutputTokens: p.maxOutputTokens ?? '' })}>
                       Edit
                     </button>
                     <button className="glass-panel" style={{ padding: '4px 10px', cursor: 'pointer', color: 'salmon' }}
@@ -485,7 +486,7 @@ export default function App() {
                     </button>
                   </div>
                 ))}
-                <button onClick={() => setProfileForm({ name: '', provider: 'OpenAI', model: 'gpt-4o', baseUrl: '', apiKey: '' })}
+                <button onClick={() => setProfileForm({ name: '', provider: 'OpenAI', model: 'gpt-4o', baseUrl: '', apiKey: '', contextWindow: '', maxOutputTokens: '' })}
                   style={{ background: 'var(--accent-color)', color: '#000', border: 'none', borderRadius: '8px', padding: '10px', cursor: 'pointer', fontWeight: 600, marginTop: '10px' }}>
                   Add Model
                 </button>
@@ -520,6 +521,20 @@ export default function App() {
                   <label>API Key</label>
                   <input type="password" value={profileForm.apiKey} onChange={(e) => setProfileForm({ ...profileForm, apiKey: e.target.value })}
                     placeholder={profileForm.hasKey ? '•••••••• (leave blank to keep)' : 'Enter your API Key...'} />
+                </div>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <div style={{ flexGrow: 1 }}>
+                    <label>Context Window (Optional)</label>
+                    <input type="number" min="1" value={profileForm.contextWindow ?? ''}
+                      onChange={(e) => setProfileForm({ ...profileForm, contextWindow: e.target.value })}
+                      placeholder={`Default: ${resolveLimits(profileForm.model).contextWindow.toLocaleString()}`} />
+                  </div>
+                  <div style={{ flexGrow: 1 }}>
+                    <label>Max Output Tokens (Optional)</label>
+                    <input type="number" min="1" value={profileForm.maxOutputTokens ?? ''}
+                      onChange={(e) => setProfileForm({ ...profileForm, maxOutputTokens: e.target.value })}
+                      placeholder={`Default: ${resolveLimits(profileForm.model).maxOutputTokens.toLocaleString()}`} />
+                  </div>
                 </div>
                 <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
                   <button className="glass-panel" style={{ padding: '10px', cursor: 'pointer', color: 'var(--text-primary)', flexGrow: 1 }} onClick={() => setProfileForm(null)}>Cancel</button>
