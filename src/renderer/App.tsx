@@ -120,6 +120,19 @@ export default function App() {
   const [sessionList, setSessionList] = useState<any[]>([]);
   const [showSessionsPanel, setShowSessionsPanel] = useState(false);
 
+  /* ---- Usage / context-limit state ----
+     Refs are the source of truth: the agent-event listener registers once and
+     must both read and write these synchronously (a `usage` event is followed
+     by a `done` event that persists them before React re-renders). State
+     mirrors the refs for display. */
+  const EMPTY_SESSION_USAGE = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, turns: 0 };
+  const [sessionUsage, setSessionUsage] = useState(EMPTY_SESSION_USAGE);
+  const sessionUsageRef = useRef(EMPTY_SESSION_USAGE);
+  const [contextInfo, setContextInfo] = useState<any>(null);
+  const contextInfoRef = useRef<any>(null);
+  const setSessionUsageBoth = (u: any) => { sessionUsageRef.current = u; setSessionUsage(u); };
+  const setContextInfoBoth = (c: any) => { contextInfoRef.current = c; setContextInfo(c); };
+
   const applyConfig = (c: any) => {
     setConfig(c);
     setActiveSkills(
@@ -170,6 +183,7 @@ export default function App() {
               workspace: snap.workspace,
               messages: snap.messages,
               history: event.history,
+              usage: { context: contextInfoRef.current, session: sessionUsageRef.current },
             };
             saveChainRef.current = saveChainRef.current
               .then(async () => {
@@ -189,6 +203,34 @@ export default function App() {
               })
               .catch(() => { /* persistence must never break the UI */ });
           }
+        }
+        return;
+      }
+      if (event.type === 'usage') {
+        if (event.usage) {
+          const prev = sessionUsageRef.current;
+          const next = {
+            inputTokens: prev.inputTokens + (event.usage.inputTokens ?? 0),
+            outputTokens: prev.outputTokens + (event.usage.outputTokens ?? 0),
+            cachedInputTokens: prev.cachedInputTokens + (event.usage.cachedInputTokens ?? 0),
+            turns: prev.turns + ((event.agent ?? 'main') === 'main' ? 1 : 0),
+          };
+          sessionUsageRef.current = next;
+          setSessionUsage(next);
+        }
+        // Context fullness only tracks the main agent's final call; subagents
+        // run their own prompts and only matter for session accounting above.
+        if ((event.agent ?? 'main') === 'main' && event.lastStep && event.limits) {
+          const info = {
+            lastInputTokens: event.lastStep.inputTokens,
+            lastOutputTokens: event.lastStep.outputTokens,
+            contextWindow: event.limits.contextWindow,
+            maxOutputTokens: event.limits.maxOutputTokens,
+            pct: event.contextPct ?? 0,
+            estimated: false,
+          };
+          contextInfoRef.current = info;
+          setContextInfo(info);
         }
         return;
       }
@@ -286,6 +328,8 @@ export default function App() {
     setMessages([]);
     setHistory(undefined);
     setCurrentSessionId(null);
+    setSessionUsageBoth(EMPTY_SESSION_USAGE);
+    setContextInfoBoth(null);
   };
 
   const selectWorkspace = async () => {
@@ -298,6 +342,21 @@ export default function App() {
   };
 
   const activeProfile = config?.profiles.find((p: any) => p.id === config.activeProfileId) ?? null;
+  const activeLimits = resolveLimits(activeProfile?.model, activeProfile ?? undefined);
+
+  /* Live context display: real reported usage when we have it, otherwise a
+     chars/4 estimate of the pending history (marked with ~ in the UI). */
+  const estimateHistoryTokens = (h: any[] | undefined) =>
+    (h ?? []).reduce((sum: number, m: any) =>
+      sum + Math.ceil((typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '')).length / 4), 0);
+  const displayContext = contextInfo ?? (history?.length ? {
+    lastInputTokens: estimateHistoryTokens(history),
+    lastOutputTokens: 0,
+    contextWindow: activeLimits.contextWindow,
+    maxOutputTokens: activeLimits.maxOutputTokens,
+    pct: Math.min(1, estimateHistoryTokens(history) / activeLimits.contextWindow),
+    estimated: true,
+  } : null);
 
   const connectedMcpServers = mcpData.servers
     .filter((s: any) => mcpData.statuses[s.id]?.status === 'connected')
@@ -312,7 +371,11 @@ export default function App() {
     setIsTyping(true);
     setStatusText(null);
 
-    window.electron?.sendPrompt(input, workspace, config.activeProfileId, history);
+    window.electron?.sendPrompt(input, workspace, config.activeProfileId, history, {
+      // Real usage only — an estimate as the compaction trigger could compact
+      // too early (or too late) when the provider never reports usage.
+      lastInputTokens: contextInfo && !contextInfo.estimated ? contextInfo.lastInputTokens : undefined,
+    });
   };
 
   /* ---- Skills handlers ---- */
@@ -337,6 +400,10 @@ export default function App() {
     setHistory(s.history ?? undefined);
     setCurrentSessionId(s.id);
     setShowSessionsPanel(false);
+    // Restore persisted usage; absent → null/zeros, and the display layer
+    // falls back to a live chars/4 estimate of the restored history.
+    setSessionUsageBoth(s.usage?.session ?? EMPTY_SESSION_USAGE);
+    setContextInfoBoth(s.usage?.context ?? null);
   };
 
   const handleDeleteSession = async (id: string) => {
@@ -360,28 +427,69 @@ export default function App() {
     setMessages((prev) => [...prev, { id: Date.now().toString(), role: 'assistant', content }]);
   };
 
+  const compactNow = async () => {
+    if (isTyping) return;
+    if (!activeProfile?.hasKey) { appendLocalNote('No active model profile with an API key — configure one in Settings.'); return; }
+    if (!history || history.length <= 2) { appendLocalNote('Nothing to compact yet.'); return; }
+    const before = history.length;
+    setIsTyping(true);
+    try {
+      const res = await window.electron?.compactNow(config.activeProfileId, history);
+      if (res?.ok) {
+        setHistory(res.history);
+        // The pre-compaction reported tokens are stale now; drop to an
+        // estimate so the banner clears and the stale count is never sent
+        // back as a compaction trigger.
+        const est = estimateHistoryTokens(res.history);
+        setContextInfoBoth({
+          lastInputTokens: est,
+          lastOutputTokens: 0,
+          contextWindow: activeLimits.contextWindow,
+          maxOutputTokens: activeLimits.maxOutputTokens,
+          pct: Math.min(1, est / activeLimits.contextWindow),
+          estimated: true,
+        });
+        appendLocalNote(`History compacted: ${before} → ${res.history.length} messages.`);
+      } else {
+        appendLocalNote(`Compaction failed${res?.error ? `: ${res.error}` : '.'}`);
+      }
+    } finally {
+      setIsTyping(false);
+    }
+  };
+
+  const fmtTok = (n: number) => (n >= 1000 ? `${Math.round(n / 100) / 10}k` : `${n}`);
+  const contextReport = () => {
+    if (!displayContext) return 'Context: empty — no conversation yet.';
+    const used = displayContext.lastInputTokens + displayContext.lastOutputTokens;
+    const approx = displayContext.estimated ? '~' : '';
+    return `Context: ${approx}${fmtTok(used)} / ${fmtTok(displayContext.contextWindow)} tokens (${Math.round(displayContext.pct * 100)}% ${displayContext.estimated ? 'estimated' : 'reported'}).`;
+  };
+  const usageReport = () => {
+    const overridden = (field: string) => (activeProfile?.[field] ? ' (override)' : '');
+    const lines = [
+      `Model: ${activeProfile?.model ?? '(none)'} — context window ${activeLimits.contextWindow.toLocaleString()}${overridden('contextWindow')}, max output ${activeLimits.maxOutputTokens.toLocaleString()}${overridden('maxOutputTokens')}.`,
+      contextReport(),
+    ];
+    if (displayContext && !displayContext.estimated) {
+      lines.push(`Last turn: ${fmtTok(displayContext.lastInputTokens)} in · ${fmtTok(displayContext.lastOutputTokens)} out.`);
+    }
+    lines.push(`Session: ${sessionUsage.turns} turn${sessionUsage.turns === 1 ? '' : 's'} · ${fmtTok(sessionUsage.inputTokens)} in · ${fmtTok(sessionUsage.outputTokens)} out · ${fmtTok(sessionUsage.cachedInputTokens)} cached.`);
+    const p = activeLimits.pricing;
+    if (p && (sessionUsage.inputTokens || sessionUsage.outputTokens)) {
+      const cost = ((sessionUsage.inputTokens - sessionUsage.cachedInputTokens) * p.inPerMTok
+        + sessionUsage.cachedInputTokens * (p.cachedInPerMTok ?? p.inPerMTok)
+        + sessionUsage.outputTokens * p.outPerMTok) / 1e6;
+      lines.push(`Est. session cost: $${cost.toFixed(4)}.`);
+    }
+    return lines.join('\n');
+  };
+
   const baseCommands = [
     { name: 'clear', description: 'Start a new chat', run: () => startNewChat() },
-    {
-      name: 'compact', description: 'Compact conversation history now', run: async () => {
-        if (isTyping) return;
-        if (!activeProfile?.hasKey) { appendLocalNote('No active model profile with an API key — configure one in Settings.'); return; }
-        if (!history || history.length <= 2) { appendLocalNote('Nothing to compact yet.'); return; }
-        const before = history.length;
-        setIsTyping(true);
-        try {
-          const res = await window.electron?.compactNow(config.activeProfileId, history);
-          if (res?.ok) {
-            setHistory(res.history);
-            appendLocalNote(`History compacted: ${before} → ${res.history.length} messages.`);
-          } else {
-            appendLocalNote(`Compaction failed${res?.error ? `: ${res.error}` : '.'}`);
-          }
-        } finally {
-          setIsTyping(false);
-        }
-      }
-    },
+    { name: 'compact', description: 'Compact conversation history now', run: () => compactNow() },
+    { name: 'usage', description: 'Show token usage, limits, and cost', run: () => appendLocalNote(usageReport()) },
+    { name: 'context', description: 'Show context window usage', run: () => appendLocalNote(contextReport()) },
     {
       name: 'model', description: 'Switch model profile: /model <name>', run: (arg?: string) => {
         const profiles = config?.profiles ?? [];
@@ -813,8 +921,18 @@ export default function App() {
         <div ref={chatEndRef} />
       </div>
 
+      {/* Context-limit warning banner */}
+      {displayContext && displayContext.pct >= 0.8 && !isTyping && (
+        <div className="glass-panel context-warning-banner">
+          <span>
+            Context is {Math.round(displayContext.pct * 100)}%{displayContext.estimated ? ' (estimated)' : ''} full — compaction will run automatically soon.
+          </span>
+          <button className="context-warning-action" onClick={() => compactNow()}>Compact now</button>
+        </div>
+      )}
+
       {/* Rich Input */}
-      <div style={{ marginTop: '20px' }}>
+      <div style={{ marginTop: displayContext && displayContext.pct >= 0.8 && !isTyping ? '8px' : '20px' }}>
         <RichInput
           value={input}
           onChange={setInput}
@@ -834,6 +952,8 @@ export default function App() {
           busy={isTyping}
           onStop={() => window.electron?.cancelPrompt()}
           commands={slashCommands}
+          contextInfo={displayContext}
+          capabilities={activeLimits.capabilities}
         />
       </div>
     </div>

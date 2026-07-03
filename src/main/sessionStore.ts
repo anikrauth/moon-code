@@ -46,7 +46,7 @@ export function createSessionStore({ dir }) {
 
         getSession: (id) => getSessionById(id),
 
-        saveSession({ id, title, workspace, messages, history }) {
+        saveSession({ id, title, workspace, messages, history, usage }) {
             const now = Date.now();
             const existing = id ? getSessionById(id) : null;
             const sessionId = existing ? existing.id : `s-${randomUUID()}`;
@@ -59,6 +59,7 @@ export function createSessionStore({ dir }) {
                 updatedAt: now,
                 messages,
                 history,
+                usage: usage ?? null,
             };
             atomicWrite(path.join(dir, `${sessionId}.json`), session);
             const index = readIndex().filter((e) => e.id !== sessionId);

@@ -44,7 +44,19 @@ interface RichInputProps {
   busy?: boolean;
   onStop?: () => void;
   commands?: { name: string; description: string; run: (arg?: string) => void }[];
+  /** Context window fullness (null until there is a conversation) */
+  contextInfo?: {
+    lastInputTokens: number;
+    lastOutputTokens: number;
+    contextWindow: number;
+    pct: number;
+    estimated: boolean;
+  } | null;
+  /** Active model capabilities (gates toolbar affordances) */
+  capabilities?: { tools: boolean; vision: boolean };
 }
+
+const fmtTok = (n: number) => (n >= 1000 ? `${Math.round(n / 100) / 10}k` : `${n}`);
 
 /* ------------------------------------------------------------------ */
 /*  Component                                                          */
@@ -66,6 +78,8 @@ export default function RichInput({
   busy = false,
   onStop,
   commands = [],
+  contextInfo = null,
+  capabilities = { tools: true, vision: true },
 }: RichInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [isFocused, setIsFocused] = useState(false);
@@ -182,8 +196,8 @@ export default function RichInput({
           <button
             className="ri-toolbar-btn"
             onClick={onConnectMcp}
-            disabled={disabled}
-            title="Connect MCP servers"
+            disabled={disabled || !capabilities.tools}
+            title={capabilities.tools ? 'Connect MCP servers' : 'This model does not support tool calling'}
           >
             <Globe size={16} />
             <span className="ri-toolbar-btn-label">
@@ -197,12 +211,22 @@ export default function RichInput({
           {/* Attach file (placeholder action) */}
           <button
             className="ri-toolbar-btn"
-            disabled={disabled}
-            title="Attach files"
+            disabled={disabled || !capabilities.vision}
+            title={capabilities.vision ? 'Attach files' : 'This model does not support images'}
           >
             <Paperclip size={16} />
           </button>
         </div>
+
+        {/* Context window indicator */}
+        {contextInfo && (
+          <span
+            className={`ri-context-chip ${contextInfo.pct >= 0.9 ? 'ri-context-danger' : contextInfo.pct >= 0.7 ? 'ri-context-warn' : ''}`}
+            title={`Context window: ${contextInfo.estimated ? 'estimated ' : ''}${(contextInfo.lastInputTokens + contextInfo.lastOutputTokens).toLocaleString()} of ${contextInfo.contextWindow.toLocaleString()} tokens used`}
+          >
+            {contextInfo.estimated ? '~' : ''}{Math.round(contextInfo.pct * 100)}% · {fmtTok(contextInfo.lastInputTokens + contextInfo.lastOutputTokens)}/{fmtTok(contextInfo.contextWindow)}
+          </span>
+        )}
 
         {/* Send / Stop */}
         {busy ? (

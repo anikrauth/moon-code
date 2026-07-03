@@ -236,6 +236,56 @@ button, input, select, textarea, .chat-container, .rich-input-container {
   line-height: 1;
 }
 
+/* ---- Context window indicator ---- */
+.ri-context-chip {
+  margin-left: auto;
+  margin-right: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  cursor: default;
+}
+
+.ri-context-warn {
+  color: var(--warning-color);
+}
+
+.ri-context-danger {
+  color: var(--danger-color);
+}
+
+/* ---- Context-limit warning banner ---- */
+.context-warning-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 8px 14px;
+  font-size: 13px;
+  color: var(--warning-color);
+  border: 1px solid var(--warning-color);
+}
+
+.context-warning-action {
+  all: unset;
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--warning-color);
+  border: 1px solid var(--warning-color);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+
+.context-warning-action:hover {
+  background: rgba(255, 200, 0, 0.1);
+}
+
 /* ---- Send button ---- */
 .ri-send-btn {
   all: unset;
