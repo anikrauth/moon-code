@@ -1,6 +1,6 @@
 {
   "name": "moon-code",
-  "version": "1.0.0",
+  "version": "1.0.02",
   "description": "",
   "main": "dist/main/main.js",
   "scripts": {
@@ -48,6 +48,7 @@
     },
     "files": [
       "dist/**/*",
+      "marketplace-skills/**/*",
       "package.json"
     ]
   }

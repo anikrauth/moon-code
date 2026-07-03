@@ -102,7 +102,36 @@ export default function App() {
   const [config, setConfig] = useState<any>(null);
 
   /* ---- Sidebar state ---- */
-  const [sidebarTab, setSidebarTab] = useState<string | null>(null);
+  const [sidebarTab, setSidebarTab] = useState<string | null>('sessions');
+  const [skillInstallKey, setSkillInstallKey] = useState(0);
+
+  function StatusIndicator({ text }: { text: string | null }) {
+    const verbs = ['Thinking', 'Pondering', 'Simmering', 'Cogitating', 'Synthesizing'];
+    const [verb, setVerb] = useState(verbs[0]);
+    const [frame, setFrame] = useState(0);
+
+    useEffect(() => {
+      setVerb(verbs[Math.floor(Math.random() * verbs.length)]);
+      const vTimer = setInterval(() => {
+        setVerb(verbs[Math.floor(Math.random() * verbs.length)]);
+      }, 3000);
+      const sTimer = setInterval(() => {
+        setFrame((f) => (f + 1) % 10);
+      }, 100);
+      return () => { clearInterval(vTimer); clearInterval(sTimer); };
+    }, []);
+
+    const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'][frame];
+    const label = text ?? `${verb}…`;
+
+    return (
+      <div className="status-indicator">
+        <span className="status-spinner">{spinner}</span>
+        <span className="status-label">{label}</span>
+        <span className="status-esc">esc to interrupt</span>
+      </div>
+    );
+  }
 
   /* ---- Skills state ---- */
   const [activeSkills, setActiveSkills] = useState<SkillItem[]>([]);
@@ -320,6 +349,7 @@ export default function App() {
       }
       applyConfig(c);
       window.electron?.mcpList?.().then((d: any) => d && setMcpData(d));
+      window.electron?.listSessions?.().then((list: any) => setSessionList(list ?? []));
       window.electron?.onMcpEvent?.((evt: any) => {
         setMcpData((prev: any) => ({ ...prev, statuses: { ...prev.statuses, [evt.id]: { status: evt.status, toolCount: evt.toolCount, message: evt.message } } }));
       });
@@ -336,6 +366,7 @@ export default function App() {
   }, [workspace]);
 
   useEffect(() => {
+    if (sidebarTab === 'skills') refreshDiscoveredSkills();
     if (sidebarTab === 'mcp') window.electron?.mcpList?.().then((d: any) => d && setMcpData(d));
     if (sidebarTab === 'sessions') window.electron?.listSessions?.().then((list: any) => setSessionList(list ?? []));
   }, [sidebarTab]);
@@ -432,16 +463,72 @@ export default function App() {
   const handleCreateSkill = async () => {
     if (!workspace) { appendLocalNote('Select a workspace first.'); return; }
     const name = window.prompt('Skill name (used as /command and directory name):');
-    if (!name?.trim()) return;
+    const id = name?.trim();
+    if (!id) return;
+    if (!/^[a-z0-9-]+$/.test(id)) {
+      appendLocalNote('Skill name must be lowercase letters, numbers, and hyphens only (e.g. "my-skill").');
+      return;
+    }
+    if (discoveredSkills.some((s) => s.id === id)) {
+      appendLocalNote(`Skill "${id}" already exists. Delete it first or use a different name.`);
+      return;
+    }
     const description = window.prompt('One-line description:') ?? '';
     const scope = window.confirm('OK = save to this project (.moon/skills). Cancel = save to your personal (~/.moon/skills).') ? 'project' : 'personal';
-    const content = `---\nname: ${name.trim()}\ndescription: ${description.trim()}\n---\n# ${name.trim()}\n\nDescribe what this skill should do.\n`;
-    const skill = await window.electron?.createSkill(name.trim(), content, scope, workspace);
-    if (skill) {
-      appendLocalNote(`Skill "${skill.id}" created in ${scope === 'personal' ? '~/.moon/skills' : '.moon/skills'}.`);
+    const escapedDesc = description.trim().replace(/"/g, '\\"');
+    const content = `---\nname: ${id}\ndescription: "${escapedDesc}"\n---\n# ${id}\n\nDescribe what this skill should do.\n`;
+    const result = await window.electron?.createSkill(id, content, scope, workspace);
+    if (result?.success && result.skill) {
+      appendLocalNote(`Skill "${result.skill.id}" created in ${scope === 'personal' ? '~/.moon/skills' : '.moon/skills'}.`);
       refreshDiscoveredSkills();
+      setSidebarTab('skills');
+      setSkillInstallKey((k) => k + 1);
     } else {
-      appendLocalNote('Failed to create skill.');
+      appendLocalNote(`Failed to create skill: ${result?.error ?? 'unknown error'}`);
+    }
+  };
+
+  const handleInstallSkill = async () => {
+    if (!workspace) { appendLocalNote('Select a workspace first.'); return; }
+    const sourcePath = await window.electron?.selectSkill?.();
+    if (!sourcePath) return;
+    // Default disk installs to personal/global so they work across workspaces.
+    const scope = window.confirm('OK = install to this project (.moon/skills). Cancel = install globally (~/.moon/skills).') ? 'project' : 'personal';
+    const result = await window.electron?.installSkill?.(sourcePath, scope, workspace);
+    if (result?.success && result.skill) {
+      appendLocalNote(`Skill "${result.skill.id}" installed in ${scope === 'personal' ? '~/.moon/skills' : '.moon/skills'}.`);
+      refreshDiscoveredSkills();
+      setSidebarTab('skills');
+      setSkillInstallKey((k) => k + 1);
+    } else {
+      appendLocalNote(`Failed to install skill: ${result?.error ?? 'Select a SKILL.md file or a directory containing one.'}`);
+    }
+  };
+
+  const handleInstallMarketplaceSkill = async (skillId: string) => {
+    if (!workspace) { appendLocalNote('Select a workspace first.'); return; }
+    const result = await window.electron?.installMarketplaceSkill?.(skillId, workspace);
+    if (result?.success && result.skill) {
+      appendLocalNote(`Marketplace skill "${result.skill.id}" installed globally to ~/.moon/skills.`);
+      refreshDiscoveredSkills();
+      setSidebarTab('skills');
+      setSkillInstallKey((k) => k + 1);
+    } else {
+      appendLocalNote(`Failed to install marketplace skill "${skillId}": ${result?.error ?? 'unknown error'}`);
+    }
+  };
+
+  const handleInstallSkillFromUrl = async (url: string) => {
+    if (!workspace) { appendLocalNote('Select a workspace first.'); return; }
+    if (!url.trim()) return;
+    const result = await window.electron?.installSkillFromUrl?.(url.trim(), workspace);
+    if (result?.success && result.skill) {
+      appendLocalNote(`Skill "${result.skill.id}" installed globally from URL.`);
+      refreshDiscoveredSkills();
+      setSidebarTab('skills');
+      setSkillInstallKey((k) => k + 1);
+    } else {
+      appendLocalNote(`Failed to install skill from URL: ${result?.error ?? 'Must be a raw SKILL.md with YAML frontmatter.'}`);
     }
   };
 
@@ -563,6 +650,22 @@ export default function App() {
     { name: 'sessions', description: 'Open saved sessions', run: () => setSidebarTab('sessions') },
     { name: 'mcp', description: 'Open MCP servers', run: () => setSidebarTab('mcp') },
     { name: 'settings', description: 'Open settings', run: () => setSidebarTab('settings') },
+    {
+      name: 'debug', description: 'Show diagnostic info about skills, workspace, and config', run: () => {
+        const lines = [
+          `workspace: ${workspace ?? '(none)'}`,
+          `activeProfile: ${activeProfile?.name ?? '(none)'}`,
+          `discoveredSkills: ${discoveredSkills.map((s: any) => s.id).join(', ') || '(none)'}`,
+          `invokedSkills: ${invokedSkills.join(', ') || '(none)'}`,
+          `activeSkills: ${activeSkills.map((s: any) => s.id).join(', ') || '(none)'}`,
+          `electron.createSkill: ${typeof window.electron?.createSkill}`,
+          `electron.installSkill: ${typeof window.electron?.installSkill}`,
+          `electron.installMarketplaceSkill: ${typeof window.electron?.installMarketplaceSkill}`,
+          `electron.installSkillFromUrl: ${typeof window.electron?.installSkillFromUrl}`,
+        ];
+        appendLocalNote(lines.join('\n'));
+      }
+    },
   ];
   const skillCommands = discoveredSkills
     .filter((s: any) => s.userInvocable)
@@ -571,12 +674,22 @@ export default function App() {
       description: (s.description ?? '').slice(0, 80),
       run: (arg?: string) => invokeSkillById(s.id, arg),
     }));
+
   const slashCommands = [
     ...baseCommands,
     ...skillCommands,
     {
+      name: 'skills', description: 'List installed skills and open the skills panel', run: () => {
+        const lines = discoveredSkills.length > 0
+          ? discoveredSkills.map((s: any) => `/${s.id} — ${(s.description ?? '').slice(0, 80)}`).join('\n')
+          : 'No installed skills found. Open the Skills panel to create or install one.';
+        appendLocalNote(`Installed skills:\n${lines}`);
+        setSidebarTab('skills');
+      }
+    },
+    {
       name: 'help', description: 'List available commands', run: () =>
-        appendLocalNote(baseCommands.concat(skillCommands).concat([{ name: 'help', description: 'List available commands' }])
+        appendLocalNote(baseCommands.concat(skillCommands).concat([{ name: 'skills', description: 'List installed skills' }, { name: 'help', description: 'List available commands' }])
           .map((c: any) => `/${c.name} — ${c.description}`).join('\n'))
     },
   ];
@@ -669,6 +782,10 @@ export default function App() {
         invokedSkillIds={invokedSkills}
         onInvokeSkill={(id: string) => { invokeSkillById(id); setSidebarTab(null); }}
         onCreateSkill={handleCreateSkill}
+        onInstallSkill={handleInstallSkill}
+        onInstallMarketplaceSkill={handleInstallMarketplaceSkill}
+        onInstallSkillFromUrl={handleInstallSkillFromUrl}
+        skillInstallKey={skillInstallKey}
         mcpData={mcpData}
         busy={isTyping}
         onConnectMcpServer={(id: string) => window.electron?.connectMcp(id).then(setMcpData)}
@@ -754,11 +871,7 @@ export default function App() {
             );
           })
         )}
-        {isTyping && (
-          <div style={{ color: 'var(--text-secondary)', fontSize: '14px', padding: '10px' }}>
-            {statusText ?? 'Agent is thinking...'}
-          </div>
-        )}
+        {isTyping && <StatusIndicator text={statusText} />}
         <div ref={chatEndRef} />
       </div>
 
@@ -790,6 +903,14 @@ export default function App() {
           busy={isTyping}
           onStop={() => window.electron?.cancelPrompt()}
           commands={slashCommands}
+          onUnknownCommand={(name, arg) => {
+            const known = slashCommands.find((c) => c.name === name);
+            if (known) {
+              known.run(arg);
+            } else {
+              appendLocalNote(`Unknown command /${name}. Type /help for available commands.`);
+            }
+          }}
           contextInfo={displayContext}
           capabilities={activeLimits.capabilities}
         />

@@ -4,6 +4,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { z } from 'zod';
 import * as fs from 'fs';
 import * as path from 'path';
+import { StatusLine } from './statusLine';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 
@@ -404,7 +405,7 @@ function normalizeUsage(u) {
     };
 }
 
-async function runAgentLoop({ prompt, workspace, settings, history, onEvent, requestPermission, agentId, tools, systemPrompt, emitText, abortSignal, limits }) {
+async function runAgentLoop({ prompt, workspace, settings, history, onEvent, requestPermission, agentId, tools, systemPrompt, emitText, abortSignal, limits, statusLine }: any) {
     const customOpenAI = createOpenAI({
         apiKey: settings.apiKey,
         baseURL: settings.baseUrl || undefined,
@@ -428,6 +429,7 @@ async function runAgentLoop({ prompt, workspace, settings, history, onEvent, req
     let turnUsage = null;
     for await (const part of result.fullStream) {
         if (part.type === 'text-delta') {
+            if (statusLine && part.textDelta) statusLine.addTokens(estimateTokens(part.textDelta));
             if (emitText) onEvent({ type: 'message', agent: agentId, content: part.text });
         } else if (part.type === 'finish-step') {
             lastStepUsage = part.usage;
@@ -469,7 +471,7 @@ export async function handlePrompt(
         const limits = resolveLimits(settings?.model, settings);
         history = await compactHistory(history, settings, onEvent, abortSignal, false, limits, usageHint?.lastInputTokens);
         if (usageHint?.skillContent) {
-            history = [...(history ?? []), { role: 'system', content: usageHint.skillContent }];
+            history = [{ role: 'system', content: usageHint.skillContent }, ...(history ?? [])];
         }
 
         const projectMemory = await loadProjectMemory(workspace);
@@ -496,15 +498,25 @@ ${catalog.prompt({
             abortSignal, extraTools, limits, skillsCatalog: skillsCatalog ?? [],
         });
 
-        const { responseMessages, usage } = await runAgentLoop({
-            prompt, workspace, settings, history, onEvent, requestPermission,
-            agentId: 'main', tools, systemPrompt, emitText: true, abortSignal, limits,
-        });
+        const statusLine = process.stdout.isTTY ? new StatusLine({ onInterrupt: () => abortSignal?.abort?.() }) : null;
+        statusLine?.start();
 
-        const userMsg = { role: 'user', content: prompt };
-        const newHistory = [...(history ?? []), userMsg, ...responseMessages];
+        try {
+            const { responseMessages, usage } = await runAgentLoop({
+                prompt, workspace, settings, history, onEvent, requestPermission,
+                agentId: 'main', tools, systemPrompt, emitText: true, abortSignal, limits, statusLine,
+            });
 
-        onEvent({ type: 'done', history: newHistory, usage });
+            const userMsg = { role: 'user', content: prompt };
+            const newHistory = [...(history ?? []), userMsg, ...responseMessages];
+
+            statusLine?.stop();
+            onEvent({ type: 'done', history: newHistory, usage });
+        } catch (error: any) {
+            const cancelled = abortSignal?.aborted;
+            statusLine?.stop(cancelled ? 'Interrupted.' : undefined);
+            throw error;
+        }
     } catch (error: any) {
         const cancelled = abortSignal?.aborted;
         onEvent({ type: 'error', agent: 'main', content: cancelled ? 'Cancelled.' : error.message });
