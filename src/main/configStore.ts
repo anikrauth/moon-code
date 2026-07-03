@@ -37,7 +37,7 @@ export function createConfigStore({ dir, safeStorage }) {
         if (safeStorage.isEncryptionAvailable()) {
             return { apiKeyEnc: safeStorage.encryptString(raw).toString('base64'), enc: true };
         }
-        console.warn('[moon-agent] OS encryption unavailable; storing API key base64-encoded only.');
+        console.warn('[moon-code] OS encryption unavailable; storing API key base64-encoded only.');
         return { apiKeyEnc: Buffer.from(raw, 'utf-8').toString('base64'), enc: false };
     }
 
@@ -56,7 +56,7 @@ export function createConfigStore({ dir, safeStorage }) {
         if (safeStorage.isEncryptionAvailable()) {
             return { data: safeStorage.encryptString(raw).toString('base64'), enc: true };
         }
-        console.warn('[moon-agent] OS encryption unavailable; storing secret base64-encoded only.');
+        console.warn('[moon-code] OS encryption unavailable; storing secret base64-encoded only.');
         return { data: Buffer.from(raw, 'utf-8').toString('base64'), enc: false };
     }
 

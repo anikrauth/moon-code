@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 :root {
   --bg-color: #0d0d0d;
@@ -6,23 +6,32 @@
   --border-color: rgba(255, 255, 255, 0.1);
   --text-primary: #f1f1f1;
   --text-secondary: #a1a1a1;
-  --accent-color: #cb8b5c;
-  --accent-hover: #e09f70;
-  --accent-subtle: rgba(203, 139, 92, 0.12);
+  --accent-color: #d77757;
+  --accent-hover: #e08868;
+  --accent-subtle: rgba(215, 119, 87, 0.12);
   --surface-hover: rgba(255, 255, 255, 0.06);
   --surface-active: rgba(255, 255, 255, 0.1);
   --success-color: #34d399;
   --warning-color: #f59e0b;
   --danger-color: #ef4444;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Monaco', 'Cascadia Code', 'Roboto Mono', monospace;
+  --radius-lg: 6px;
+  --radius-md: 4px;
+  --radius-sm: 2px;
 }
 
 body {
   margin: 0;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: -0.01em;
+  font-feature-settings: 'liga' 1, 'calt' 1;
   background-color: var(--bg-color);
   color: var(--text-primary);
   height: 100vh;
   overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   /* Make the window draggable by its background */
   -webkit-app-region: drag;
 }
@@ -33,7 +42,8 @@ html {
 }
 
 /* Ensure interactive elements aren't dragged */
-button, input, select, textarea, .chat-container, .rich-input-container {
+button, input, select, textarea, .chat-container, .rich-input-container,
+.sidebar-container, .sidebar-content {
   -webkit-app-region: no-drag;
 }
 
@@ -48,7 +58,7 @@ button, input, select, textarea, .chat-container, .rich-input-container {
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid var(--border-color);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
 }
 
 /* Scrollbar styles */
@@ -60,7 +70,7 @@ button, input, select, textarea, .chat-container, .rich-input-container {
 }
 ::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.2);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.3);
@@ -70,7 +80,7 @@ button, input, select, textarea, .chat-container, .rich-input-container {
 .markdown-body pre {
   background: rgba(0,0,0,0.5);
   padding: 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   overflow-x: auto;
 }
 
@@ -102,7 +112,7 @@ button, input, select, textarea, .chat-container, .rich-input-container {
 .modal-content input, .modal-content select {
   width: 100%;
   padding: 10px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border-color);
   background: rgba(0,0,0,0.4);
   color: var(--text-primary);
@@ -122,6 +132,93 @@ button, input, select, textarea, .chat-container, .rich-input-container {
   display: block;
 }
 
+/* ---- Sidebar panel form fields (tighter than the 400px modal) ---- */
+.settings-panel,
+.mcp-panel {
+  padding: 0;
+  overflow-y: auto;
+}
+
+.sp-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+}
+
+.sp-form input, .sp-form select, .sp-form textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  background: rgba(0,0,0,0.4);
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  box-sizing: border-box;
+  font-family: inherit;
+}
+
+.sp-form input:focus, .sp-form select:focus, .sp-form textarea:focus {
+  border-color: var(--accent-color);
+}
+
+.sp-form label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+  display: block;
+}
+
+/* ================================================================== */
+/*  USAGE PANEL                                                        */
+/* ================================================================== */
+
+.usage-panel {
+  padding: 16px;
+  gap: 16px;
+  overflow-y: auto;
+}
+
+.usage-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.usage-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+.usage-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.usage-row span:last-child {
+  color: var(--text-secondary);
+}
+
+.usage-bar-track {
+  width: 100%;
+  height: 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.usage-bar-fill {
+  height: 100%;
+  background: var(--accent-color);
+  transition: width 0.2s ease;
+}
+
 
 /* ================================================================== */
 /*  RICH INPUT (Claude-style multi-line input with toolbar + chips)    */
@@ -132,15 +229,15 @@ button, input, select, textarea, .chat-container, .rich-input-container {
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--border-color);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .rich-input-focused {
-  border-color: rgba(203, 139, 92, 0.4);
-  box-shadow: 0 0 0 3px rgba(203, 139, 92, 0.08), 0 8px 32px rgba(0, 0, 0, 0.3);
+  border-color: rgba(215, 119, 87, 0.4);
+  box-shadow: 0 0 0 3px rgba(215, 119, 87, 0.08), 0 8px 32px rgba(0, 0, 0, 0.3);
 }
 
 /* Dim only — interaction is gated per control (textarea/buttons carry their own
@@ -157,7 +254,7 @@ button, input, select, textarea, .chat-container, .rich-input-container {
   box-sizing: border-box;
   padding: 14px 16px 6px;
   font-family: inherit;
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.5;
   color: var(--text-primary);
   resize: none;
@@ -192,7 +289,7 @@ button, input, select, textarea, .chat-container, .rich-input-container {
   align-items: center;
   gap: 5px;
   padding: 6px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   font-size: 13px;
   font-weight: 500;
   color: var(--text-secondary);
@@ -228,7 +325,7 @@ button, input, select, textarea, .chat-container, .rich-input-container {
   min-width: 16px;
   height: 16px;
   padding: 0 4px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   font-size: 10px;
   font-weight: 600;
   background: var(--accent-color);
@@ -272,7 +369,7 @@ button, input, select, textarea, .chat-container, .rich-input-container {
 .context-warning-action {
   all: unset;
   padding: 4px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   font-size: 12px;
   font-weight: 600;
   color: var(--warning-color);
@@ -294,7 +391,7 @@ button, input, select, textarea, .chat-container, .rich-input-container {
   justify-content: center;
   width: 36px;
   height: 36px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.06);
   color: var(--text-secondary);
   cursor: not-allowed;
@@ -322,20 +419,130 @@ button, input, select, textarea, .chat-container, .rich-input-container {
 /* ================================================================== */
 
 .skills-panel,
-.mcp-panel {
-  width: 460px;
-  max-height: 520px;
+.mcp-panel,
+.settings-panel,
+.usage-panel {
+  flex: 1;
   padding: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border-radius: 16px;
-  animation: panelIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ================================================================== */
+/*  SIDEBAR                                                            */
+/* ================================================================== */
+
+.sidebar-container {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.sidebar-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 4px;
+  width: 44px;
+  flex-shrink: 0;
+}
+
+.rail-btn {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  position: relative;
+}
+
+.rail-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.rail-btn.active {
+  color: var(--accent-color);
+  background: var(--accent-subtle);
+}
+
+.rail-btn.active::before {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-color);
+}
+
+.rail-spacer {
+  flex: 1;
+}
+
+.sidebar-content {
+  width: 280px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--panel-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  margin-left: 4px;
+  animation: panelIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @keyframes panelIn {
-  from { opacity: 0; transform: translateY(12px) scale(0.97); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
+  from { opacity: 0; transform: translateX(8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* ---- Discovered skills / create-skill affordances ---- */
+.sp-source-tag {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary);
+}
+
+.sp-invoked-badge {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-subtle);
+  color: var(--accent-color);
+}
+
+.sp-create-btn {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 10px;
+  padding: 10px;
+  border-radius: var(--radius-md);
+  background: var(--accent-color);
+  color: #000;
+  font-weight: 600;
+  cursor: pointer;
 }
 
 .sp-header {
@@ -354,7 +561,7 @@ button, input, select, textarea, .chat-container, .rich-input-container {
 
 .sp-header-title h3 {
   margin: 0;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
 }
 
@@ -365,7 +572,7 @@ button, input, select, textarea, .chat-container, .rich-input-container {
   justify-content: center;
   width: 28px;
   height: 28px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   color: var(--text-secondary);
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
@@ -397,7 +604,7 @@ button, input, select, textarea, .chat-container, .rich-input-container {
   width: 100%;
   box-sizing: border-box;
   padding: 8px 10px 8px 30px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border-color);
   background: rgba(0, 0, 0, 0.3);
   color: var(--text-primary);
@@ -406,7 +613,7 @@ button, input, select, textarea, .chat-container, .rich-input-container {
 }
 
 .sp-search:focus {
-  border-color: rgba(203, 139, 92, 0.4);
+  border-color: rgba(215, 119, 87, 0.4);
 }
 
 .sp-search::placeholder {
@@ -444,7 +651,7 @@ button, input, select, textarea, .chat-container, .rich-input-container {
   width: 100%;
   box-sizing: border-box;
   padding: 10px 10px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: background 0.15s;
 }
@@ -458,7 +665,7 @@ button, input, select, textarea, .chat-container, .rich-input-container {
 }
 
 .sp-skill-active:hover {
-  background: rgba(203, 139, 92, 0.18);
+  background: rgba(215, 119, 87, 0.18);
 }
 
 .sp-skill-info {
@@ -497,14 +704,14 @@ button, input, select, textarea, .chat-container, .rich-input-container {
   justify-content: center;
   width: 24px;
   height: 24px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   color: var(--text-secondary);
   transition: color 0.15s, background 0.15s;
 }
 
 .sp-skill-active .sp-skill-toggle {
   color: var(--accent-color);
-  background: rgba(203, 139, 92, 0.15);
+  background: rgba(215, 119, 87, 0.15);
 }
 
 .sp-empty {
@@ -527,7 +734,7 @@ button, input, select, textarea, .chat-container, .rich-input-container {
   width: 100%;
   box-sizing: border-box;
   padding: 12px 10px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: background 0.15s;
 }
@@ -559,7 +766,7 @@ button, input, select, textarea, .chat-container, .rich-input-container {
   justify-content: center;
   width: 32px;
   height: 32px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.06);
   color: var(--text-secondary);
 }
@@ -596,7 +803,7 @@ button, input, select, textarea, .chat-container, .rich-input-container {
   font-size: 10px;
   font-weight: 500;
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: rgba(255, 255, 255, 0.06);
   color: var(--text-secondary);
   text-transform: uppercase;
@@ -608,7 +815,7 @@ button, input, select, textarea, .chat-container, .rich-input-container {
   font-size: 12px;
   font-weight: 500;
   padding: 5px 12px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.08);
   color: var(--text-primary);
   transition: background 0.15s, color 0.15s;
@@ -642,6 +849,10 @@ button, input, select, textarea, .chat-container, .rich-input-container {
   opacity: 0.4;
 }
 
+.mcp-status-error {
+  color: var(--danger-color);
+}
+
 .mcp-meta-error {
   color: var(--warning-color);
 }
@@ -649,7 +860,7 @@ button, input, select, textarea, .chat-container, .rich-input-container {
 .mcp-secrets-input {
   width: 100%;
   padding: 10px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border-color);
   background: rgba(0, 0, 0, 0.4);
   color: var(--text-primary);
@@ -715,7 +926,7 @@ button, input, select, textarea, .chat-container, .rich-input-container {
   margin: 4px 0 4px 21px;
   background: rgba(0, 0, 0, 0.4);
   padding: 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   max-height: 200px;
   overflow: auto;
   font-size: 12px;
@@ -724,7 +935,7 @@ button, input, select, textarea, .chat-container, .rich-input-container {
 }
 .agent-badge {
   background: rgba(255, 255, 255, 0.1);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 1px 6px;
   font-size: 10px;
 }
@@ -760,7 +971,7 @@ button, input, select, textarea, .chat-container, .rich-input-container {
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--border-color);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 6px;
   max-height: 260px;
   overflow-y: auto;
@@ -771,7 +982,7 @@ button, input, select, textarea, .chat-container, .rich-input-container {
   align-items: baseline;
   gap: 10px;
   padding: 8px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   font-size: 13px;
 }

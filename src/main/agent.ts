@@ -326,7 +326,7 @@ function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpaw
             execute: async ({ task }) => {
                 const subId = `sub-${++spawnState.counter}`;
                 emit({ type: 'tool_call', name: 'spawn_agent', arguments: JSON.stringify({ task }) });
-                const subSystemPrompt = `You are a Moon Agent subagent working autonomously in the workspace at ${workspace}. Complete the following task using your tools, then reply with concise plain-text findings. Do not ask questions; do not output JSON UI specs.
+                const subSystemPrompt = `You are a Moon Code subagent working autonomously in the workspace at ${workspace}. Complete the following task using your tools, then reply with concise plain-text findings. Do not ask questions; do not output JSON UI specs.
 ${spawnState.projectMemory ? `\nPROJECT INSTRUCTIONS (from MOON.md in the workspace root — follow these):\n${spawnState.projectMemory}\n` : ''}
 ${spawnState.skillsText ? `\n${spawnState.skillsText}\n` : ''}`;
                 try {
@@ -445,15 +445,18 @@ export async function handlePrompt(
     abortSignal?: AbortSignal,
     extraTools?: any,
     skillsText?: string,
-    usageHint?: { lastInputTokens?: number },
+    usageHint?: { lastInputTokens?: number; skillContent?: string },
 ) {
     try {
         const limits = resolveLimits(settings?.model, settings);
         history = await compactHistory(history, settings, onEvent, abortSignal, false, limits, usageHint?.lastInputTokens);
+        if (usageHint?.skillContent) {
+            history = [...(history ?? []), { role: 'system', content: usageHint.skillContent }];
+        }
 
         const projectMemory = await loadProjectMemory(workspace);
 
-        const systemPrompt = `You are Moon Agent, an advanced coding agentic IDE for Mac. You have full access to the user's workspace at ${workspace}. You must use tools to accomplish the user's requests autonomously. Do NOT wait for the user if you can figure it out. Answer concisely. Use grep_search and glob_search to find code instead of running grep or find through run_command.
+        const systemPrompt = `You are Moon Code, an advanced coding agentic IDE for Mac. You have full access to the user's workspace at ${workspace}. You must use tools to accomplish the user's requests autonomously. Do NOT wait for the user if you can figure it out. Answer concisely. Use grep_search and glob_search to find code instead of running grep or find through run_command.
 ${projectMemory ? `\nPROJECT INSTRUCTIONS (from ${MEMORY_FILE} in the workspace root — follow these):\n${projectMemory}\n` : ''}
 ${skillsText ? `\n${skillsText}\n` : ''}
 ${catalog.prompt({

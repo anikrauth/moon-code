@@ -40,8 +40,8 @@
     "wait-on": "^9.0.10"
   },
   "build": {
-    "appId": "com.moonagent.desktop",
-    "productName": "Moon Agent",
+    "appId": "com.mooncode.desktop",
+    "productName": "Moon Code",
     "icon": "build/icon.png",
     "directories": {
       "output": "release"

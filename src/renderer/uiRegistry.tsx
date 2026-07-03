@@ -8,7 +8,7 @@ function CodeBlock({ props }) {
         ? hljs.highlight(props.code, { language: props.language }).value
         : hljs.highlightAuto(props.code).value;
     return (
-        <pre style={{ background: 'rgba(0,0,0,0.4)', padding: '12px', borderRadius: '8px', overflowX: 'auto' }}>
+        <pre style={{ background: 'rgba(0,0,0,0.4)', padding: '12px', borderRadius: 'var(--radius-md)', overflowX: 'auto' }}>
             <code className="hljs" dangerouslySetInnerHTML={{ __html: highlighted }} />
         </pre>
     );

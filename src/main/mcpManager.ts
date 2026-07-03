@@ -47,7 +47,7 @@ export function createMcpManager({ getServer, resolveSecrets, onStatus }) {
                     env: { ...getDefaultEnvironment(), ...(secrets.env ?? {}) },
                 });
             }
-            const client = new Client({ name: 'moon-agent', version: '1.0.0' }, { capabilities: {} });
+            const client = new Client({ name: 'moon-code', version: '1.0.0' }, { capabilities: {} });
             transport.onclose = () => {
                 if (connections.delete(id)) emit(id, 'disconnected');
             };

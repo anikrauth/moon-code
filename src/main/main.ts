@@ -6,8 +6,9 @@ import { createConfigStore } from './configStore';
 import { createSessionStore } from './sessionStore';
 import { createMcpManager } from './mcpManager';
 import { SKILL_CATALOG } from '../shared/skillCatalog';
+import { scanSkills } from './skillScanner';
 
-app.name = 'Moon Agent';
+app.name = 'Moon Code';
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -69,6 +70,27 @@ app.whenReady().then(() => {
   ipcMain.handle('config:setActiveProfile', configHandler((id) => configStore.setActiveProfile(id)));
   ipcMain.handle('config:setSkillIds', configHandler((ids) => configStore.setSkillIds(ids)));
   ipcMain.handle('config:setMcpIds', configHandler((ids) => configStore.setMcpIds(ids)));
+
+  ipcMain.handle('skills:discover', (_e, workspace: string) => {
+    try { return scanSkills(workspace); } catch (e) { console.error('[skills]', e); return []; }
+  });
+  ipcMain.handle('skills:read', (_e, id: string, workspace: string) => {
+    try {
+      const skill = scanSkills(workspace).find((s) => s.id === id);
+      return skill ? { content: skill.content } : null;
+    } catch (e) { console.error('[skills]', e); return null; }
+  });
+  ipcMain.handle('skills:create', (_e, name: string, content: string, scope: 'project' | 'personal', workspace: string) => {
+    try {
+      const base = scope === 'personal'
+        ? path.join(require('os').homedir(), '.moon', 'skills')
+        : path.join(workspace, '.moon', 'skills');
+      const dir = path.join(base, name);
+      require('fs').mkdirSync(dir, { recursive: true });
+      require('fs').writeFileSync(path.join(dir, 'SKILL.md'), content, 'utf-8');
+      return scanSkills(workspace).find((s) => s.id === name) ?? null;
+    } catch (e) { console.error('[skills]', e); return null; }
+  });
 
   const mcpManager = createMcpManager({
       getServer: (id) => configStore.getRedacted().mcpServers.find((s) => s.id === id),
@@ -137,7 +159,7 @@ app.whenReady().then(() => {
     pendingPermissions.clear();
   };
 
-  ipcMain.on('agent:prompt', (event, prompt: string, workspace: string, profileId: string, history: any, meta?: { lastInputTokens?: number }) => {
+  ipcMain.on('agent:prompt', (event, prompt: string, workspace: string, profileId: string, history: any, meta?: { lastInputTokens?: number; skillContent?: string }) => {
     const settings = configStore.resolveSettings(profileId);
     if (!settings) {
       event.reply('agent:event', { type: 'error', agent: 'main', content: 'Selected model profile has no API key. Open Settings and configure one.' });
@@ -164,9 +186,15 @@ app.whenReady().then(() => {
     const activeSkills = configStore.getConfig().activeSkillIds
         .map((sid) => SKILL_CATALOG.find((s) => s.id === sid))
         .filter(Boolean);
-    const skillsText = activeSkills.length
+    const bundledSkillsText = activeSkills.length
         ? 'ACTIVE SKILLS — follow these working practices:\n\n' + activeSkills.map((s) => `${s.name}:\n${s.instructions}`).join('\n\n')
         : '';
+    const discovered = scanSkills(workspace);
+    const invocableSkills = discovered.filter((s) => s.userInvocable && !s.disableModelInvocation);
+    const catalogText = invocableSkills.length
+        ? 'AVAILABLE SKILLS — invoke with /skill-name or use when relevant:\n' + invocableSkills.map((s) => `- ${s.id}: ${s.description}`).join('\n')
+        : '';
+    const skillsText = [bundledSkillsText, catalogText].filter(Boolean).join('\n\n');
     handlePrompt(prompt, workspace, settings, history, (agentEvent) => {
       event.reply('agent:event', agentEvent);
     }, requestPermission, activeTurn.signal, mcpManager.getAgentTools(), skillsText, meta);

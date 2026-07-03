@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('electron', {
   selectFolder: () => ipcRenderer.invoke('dialog:openDirectory'),
-  sendPrompt: (prompt: string, workspace: string, profileId: string, history: any, meta?: { lastInputTokens?: number }) => ipcRenderer.send('agent:prompt', prompt, workspace, profileId, history, meta),
+  sendPrompt: (prompt: string, workspace: string, profileId: string, history: any, meta?: { lastInputTokens?: number; skillContent?: string }) => ipcRenderer.send('agent:prompt', prompt, workspace, profileId, history, meta),
   respondPermission: (id: string, allow: boolean, alwaysAllow: boolean) => ipcRenderer.send('agent:permission-response', id, allow, alwaysAllow),
   cancelPrompt: () => ipcRenderer.send('agent:cancel'),
   onAgentEvent: (callback: (event: any) => void) => {
@@ -29,4 +29,8 @@ contextBridge.exposeInMainWorld('electron', {
     ipcRenderer.on('mcp:event', (_event, value) => callback(value));
   },
   compactNow: (profileId: string, history: any) => ipcRenderer.invoke('agent:compact', profileId, history),
+  discoverSkills: (workspace: string) => ipcRenderer.invoke('skills:discover', workspace),
+  readSkill: (id: string, workspace: string) => ipcRenderer.invoke('skills:read', id, workspace),
+  createSkill: (name: string, content: string, scope: 'project' | 'personal', workspace: string) =>
+    ipcRenderer.invoke('skills:create', name, content, scope, workspace),
 });

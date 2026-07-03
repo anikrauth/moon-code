@@ -1,12 +1,10 @@
 // @ts-nocheck
 import React, { useState, useEffect, useRef } from 'react';
-import { FolderOpen, Settings, X, Plus, History } from 'lucide-react';
+import { FolderOpen, Plus } from 'lucide-react';
 import RichInput, { SkillItem } from './RichInput';
-import SkillsPanel from './SkillsPanel';
+import Sidebar from './Sidebar';
 import { SKILL_CATALOG } from '../shared/skillCatalog';
 import { resolveLimits } from '../shared/modelLimits';
-import McpPanel from './McpPanel';
-import SessionsPanel from './SessionsPanel';
 import { JSONUIProvider, Renderer } from '@json-render/react';
 import { registry } from './uiRegistry';
 import { parseAssistantContent } from './parseAssistantContent';
@@ -100,25 +98,24 @@ export default function App() {
   const [history, setHistory] = useState<any[] | undefined>(undefined);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
   const [statusText, setStatusText] = useState<string | null>(null);
   const [config, setConfig] = useState<any>(null);
-  const [profileForm, setProfileForm] = useState<any>(null); // null = closed; {} = new; {id,...} = edit
+
+  /* ---- Sidebar state ---- */
+  const [sidebarTab, setSidebarTab] = useState<string | null>(null);
 
   /* ---- Skills state ---- */
   const [activeSkills, setActiveSkills] = useState<SkillItem[]>([]);
-  const [showSkillsPanel, setShowSkillsPanel] = useState(false);
+  const [discoveredSkills, setDiscoveredSkills] = useState<any[]>([]);
+  const [invokedSkills, setInvokedSkills] = useState<string[]>([]);
 
   /* ---- MCP state ---- */
   const [permissionQueue, setPermissionQueue] = useState<any[]>([]);
   const [mcpData, setMcpData] = useState<any>({ servers: [], statuses: {} });
-  const [mcpForm, setMcpForm] = useState<any>(null); // null closed; {} new; {id,...} edit
-  const [showMcpPanel, setShowMcpPanel] = useState(false);
 
   /* ---- Sessions state ---- */
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [sessionList, setSessionList] = useState<any[]>([]);
-  const [showSessionsPanel, setShowSessionsPanel] = useState(false);
 
   /* ---- Usage / context-limit state ----
      Refs are the source of truth: the agent-event listener registers once and
@@ -323,6 +320,20 @@ export default function App() {
     })();
   }, []);
 
+  const refreshDiscoveredSkills = () => {
+    if (!workspace) { setDiscoveredSkills([]); return; }
+    window.electron?.discoverSkills?.(workspace).then((list: any) => setDiscoveredSkills(list ?? []));
+  };
+
+  useEffect(() => {
+    refreshDiscoveredSkills();
+  }, [workspace]);
+
+  useEffect(() => {
+    if (sidebarTab === 'mcp') window.electron?.mcpList?.().then((d: any) => d && setMcpData(d));
+    if (sidebarTab === 'sessions') window.electron?.listSessions?.().then((list: any) => setSessionList(list ?? []));
+  }, [sidebarTab]);
+
   const startNewChat = () => {
     sessionEpochRef.current += 1;
     setMessages([]);
@@ -390,6 +401,44 @@ export default function App() {
     });
   };
 
+  const handleSendWithSkillContent = (userPrompt: string, skillContent: string) => {
+    if (!workspace || !activeProfile?.hasKey) return;
+    const newMsg: ChatMessage = { id: Date.now().toString(), role: 'user', content: userPrompt };
+    setMessages(prev => [...prev, newMsg]);
+    setInput('');
+    setIsTyping(true);
+    setStatusText(null);
+    window.electron?.sendPrompt(userPrompt, workspace, config.activeProfileId, history, {
+      lastInputTokens: contextInfo && !contextInfo.estimated ? contextInfo.lastInputTokens : undefined,
+      skillContent,
+    });
+  };
+
+  const invokeSkillById = async (id: string, arg?: string) => {
+    if (!workspace) return;
+    const result = await window.electron?.readSkill(id, workspace);
+    if (!result) { appendLocalNote(`Skill "${id}" not found.`); return; }
+    setInvokedSkills((prev) => [...new Set([...prev, id])]);
+    const userPrompt = (arg ?? '').trim() || `Run the ${id} skill.`;
+    handleSendWithSkillContent(userPrompt, result.content);
+  };
+
+  const handleCreateSkill = async () => {
+    if (!workspace) { appendLocalNote('Select a workspace first.'); return; }
+    const name = window.prompt('Skill name (used as /command and directory name):');
+    if (!name?.trim()) return;
+    const description = window.prompt('One-line description:') ?? '';
+    const scope = window.confirm('OK = save to this project (.moon/skills). Cancel = save to your personal (~/.moon/skills).') ? 'project' : 'personal';
+    const content = `---\nname: ${name.trim()}\ndescription: ${description.trim()}\n---\n# ${name.trim()}\n\nDescribe what this skill should do.\n`;
+    const skill = await window.electron?.createSkill(name.trim(), content, scope, workspace);
+    if (skill) {
+      appendLocalNote(`Skill "${skill.id}" created in ${scope === 'personal' ? '~/.moon/skills' : '.moon/skills'}.`);
+      refreshDiscoveredSkills();
+    } else {
+      appendLocalNote('Failed to create skill.');
+    }
+  };
+
   /* ---- Sessions handlers ---- */
   const handleSelectSession = async (id: string) => {
     const s = await window.electron?.getSession(id);
@@ -399,7 +448,7 @@ export default function App() {
     setMessages(s.messages ?? []);
     setHistory(s.history ?? undefined);
     setCurrentSessionId(s.id);
-    setShowSessionsPanel(false);
+    setSidebarTab(null);
     // Restore persisted usage; absent → null/zeros, and the display layer
     // falls back to a live chars/4 estimate of the restored history.
     setSessionUsageBoth(s.usage?.session ?? EMPTY_SESSION_USAGE);
@@ -504,28 +553,24 @@ export default function App() {
         appendLocalNote(`Profiles: ${profiles.map((p: any) => p.name).join(', ') || '(none configured)'}. Usage: /model <name>.`);
       }
     },
-    { name: 'skills', description: 'Open the skills panel', run: () => setShowSkillsPanel(true) },
-    {
-      name: 'sessions', description: 'Open saved sessions', run: async () => {
-        const list = await window.electron?.listSessions();
-        setSessionList(list ?? []);
-        setShowSessionsPanel(true);
-      }
-    },
-    {
-      name: 'mcp', description: 'Open MCP servers', run: async () => {
-        const d = await window.electron?.mcpList?.();
-        if (d) setMcpData(d);
-        setShowMcpPanel(true);
-      }
-    },
-    { name: 'settings', description: 'Open settings', run: () => setShowSettings(true) },
+    { name: 'skills', description: 'Open the skills panel', run: () => setSidebarTab('skills') },
+    { name: 'sessions', description: 'Open saved sessions', run: () => setSidebarTab('sessions') },
+    { name: 'mcp', description: 'Open MCP servers', run: () => setSidebarTab('mcp') },
+    { name: 'settings', description: 'Open settings', run: () => setSidebarTab('settings') },
   ];
+  const skillCommands = discoveredSkills
+    .filter((s: any) => s.userInvocable)
+    .map((s: any) => ({
+      name: s.id,
+      description: (s.description ?? '').slice(0, 80),
+      run: (arg?: string) => invokeSkillById(s.id, arg),
+    }));
   const slashCommands = [
     ...baseCommands,
+    ...skillCommands,
     {
       name: 'help', description: 'List available commands', run: () =>
-        appendLocalNote(baseCommands.concat([{ name: 'help', description: 'List available commands' }])
+        appendLocalNote(baseCommands.concat(skillCommands).concat([{ name: 'help', description: 'List available commands' }])
           .map((c: any) => `/${c.name} — ${c.description}`).join('\n'))
     },
   ];
@@ -543,205 +588,15 @@ export default function App() {
     return req.arguments?.filePath ?? JSON.stringify(req.arguments);
   };
 
-  const providerOptions = [
-    { label: 'OpenAI', defaultBase: '', defaultModel: 'gpt-4o' },
-    { label: 'Zhipu AI (GLM)', defaultBase: 'https://open.bigmodel.cn/api/paas/v4', defaultModel: 'glm-4' },
-    { label: 'OpenRouter', defaultBase: 'https://openrouter.ai/api/v1', defaultModel: 'anthropic/claude-3-opus' },
-    { label: 'Cloudflare Workers AI', defaultBase: 'https://api.cloudflare.com/client/v4/accounts/ACCOUNT_ID/ai/v1', defaultModel: '@cf/meta/llama-3-8b-instruct' },
-    { label: 'Anthropic', defaultBase: 'https://api.anthropic.com/v1', defaultModel: 'claude-3-opus-20240229' },
-    { label: 'Custom (OpenAI-Compatible)', defaultBase: '', defaultModel: '' }
-  ];
-
   const inputDisabled = !workspace || isTyping || !activeProfile?.hasKey;
   const inputPlaceholder = !workspace
     ? 'Select a workspace to get started...'
     : !activeProfile?.hasKey
       ? 'Add a model profile in Settings…'
-      : 'Ask Moon Agent anything. Shift+Enter for new line.';
+      : 'Ask Moon Code anything. Shift+Enter for new line.';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '20px', paddingTop: '40px', position: 'relative', boxSizing: 'border-box' }}>
-
-      {/* Settings Modal */}
-      {showSettings && (
-        <div className="modal-overlay">
-          <div className="glass-panel modal-content">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h3 style={{ margin: 0 }}>Settings</h3>
-              <X size={18} style={{ cursor: 'pointer' }} onClick={() => setShowSettings(false)} />
-            </div>
-
-            {!profileForm ? (
-              <>
-                {config?.profiles.length === 0 && (
-                  <p style={{ color: 'var(--text-secondary)' }}>No model profiles yet. Add one to start chatting.</p>
-                )}
-                {config?.profiles.map((p: any) => (
-                  <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 0', borderBottom: '1px solid var(--border-color)' }}>
-                    <input type="radio" name="active-profile" checked={p.id === config.activeProfileId}
-                      onChange={() => window.electron?.setActiveProfile(p.id).then(setConfig)} />
-                    <div style={{ flexGrow: 1 }}>
-                      <div style={{ fontWeight: 600 }}>{p.name}{!p.hasKey && <span style={{ color: 'salmon', fontSize: '11px', marginLeft: '6px' }}>no key</span>}</div>
-                      <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{p.provider} · {p.model}</div>
-                    </div>
-                    <button className="glass-panel" style={{ padding: '4px 10px', cursor: 'pointer', color: 'var(--text-primary)' }}
-                      onClick={() => setProfileForm({ id: p.id, name: p.name, provider: p.provider, model: p.model, baseUrl: p.baseUrl, apiKey: '', hasKey: p.hasKey, contextWindow: p.contextWindow ?? '', maxOutputTokens: p.maxOutputTokens ?? '' })}>
-                      Edit
-                    </button>
-                    <button className="glass-panel" style={{ padding: '4px 10px', cursor: 'pointer', color: 'salmon' }}
-                      onClick={() => window.electron?.deleteProfile(p.id).then(setConfig)}>
-                      Delete
-                    </button>
-                  </div>
-                ))}
-                <button onClick={() => setProfileForm({ name: '', provider: 'OpenAI', model: 'gpt-4o', baseUrl: '', apiKey: '', contextWindow: '', maxOutputTokens: '' })}
-                  style={{ background: 'var(--accent-color)', color: '#000', border: 'none', borderRadius: '8px', padding: '10px', cursor: 'pointer', fontWeight: 600, marginTop: '10px' }}>
-                  Add Model
-                </button>
-              </>
-            ) : (
-              <>
-                <div>
-                  <label>Profile Name</label>
-                  <input type="text" value={profileForm.name} onChange={(e) => setProfileForm({ ...profileForm, name: e.target.value })} placeholder="e.g. GPT-4o (work)" />
-                </div>
-                <div>
-                  <label>Provider</label>
-                  <select value={profileForm.provider}
-                    onChange={(e) => {
-                      const opt = providerOptions.find((p) => p.label === e.target.value);
-                      setProfileForm(profileForm.id
-                        ? { ...profileForm, provider: e.target.value } // editing: never clobber saved fields
-                        : { ...profileForm, provider: e.target.value, baseUrl: opt?.defaultBase || '', model: opt?.defaultModel || '' });
-                    }}>
-                    {providerOptions.map((p) => <option key={p.label} value={p.label}>{p.label}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label>Model Name</label>
-                  <input type="text" value={profileForm.model} onChange={(e) => setProfileForm({ ...profileForm, model: e.target.value })} placeholder="e.g. gpt-4o" />
-                </div>
-                <div>
-                  <label>Base URL (Optional)</label>
-                  <input type="text" value={profileForm.baseUrl} onChange={(e) => setProfileForm({ ...profileForm, baseUrl: e.target.value })} placeholder="Override endpoint URL..." />
-                </div>
-                <div>
-                  <label>API Key</label>
-                  <input type="password" value={profileForm.apiKey} onChange={(e) => setProfileForm({ ...profileForm, apiKey: e.target.value })}
-                    placeholder={profileForm.hasKey ? '•••••••• (leave blank to keep)' : 'Enter your API Key...'} />
-                </div>
-                <div style={{ display: 'flex', gap: '10px' }}>
-                  <div style={{ flexGrow: 1 }}>
-                    <label>Context Window (Optional)</label>
-                    <input type="number" min="1" value={profileForm.contextWindow ?? ''}
-                      onChange={(e) => setProfileForm({ ...profileForm, contextWindow: e.target.value })}
-                      placeholder={`Default: ${resolveLimits(profileForm.model).contextWindow.toLocaleString()}`} />
-                  </div>
-                  <div style={{ flexGrow: 1 }}>
-                    <label>Max Output Tokens (Optional)</label>
-                    <input type="number" min="1" value={profileForm.maxOutputTokens ?? ''}
-                      onChange={(e) => setProfileForm({ ...profileForm, maxOutputTokens: e.target.value })}
-                      placeholder={`Default: ${resolveLimits(profileForm.model).maxOutputTokens.toLocaleString()}`} />
-                  </div>
-                </div>
-                <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
-                  <button className="glass-panel" style={{ padding: '10px', cursor: 'pointer', color: 'var(--text-primary)', flexGrow: 1 }} onClick={() => setProfileForm(null)}>Cancel</button>
-                  <button
-                    style={{ background: 'var(--accent-color)', color: '#000', border: 'none', borderRadius: '8px', padding: '10px', cursor: 'pointer', fontWeight: 600, flexGrow: 1 }}
-                    disabled={!profileForm.name.trim() || !profileForm.model.trim()}
-                    onClick={() => {
-                      const { apiKey, hasKey, ...profile } = profileForm;
-                      window.electron?.upsertProfile(profile, apiKey || undefined).then((c) => { setConfig(c); setProfileForm(null); });
-                    }}>
-                    Save Model
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* MCP Server Form Modal */}
-      {mcpForm && (
-        <div className="modal-overlay modal-overlay-elevated">
-          <div className="glass-panel modal-content">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h3 style={{ margin: 0 }}>{mcpForm.id ? 'Edit MCP Server' : 'Add MCP Server'}</h3>
-              <X size={18} style={{ cursor: 'pointer' }} onClick={() => setMcpForm(null)} />
-            </div>
-            <div>
-              <label>Name</label>
-              <input type="text" value={mcpForm.name} onChange={(e) => setMcpForm({ ...mcpForm, name: e.target.value })} placeholder="e.g. GitHub" />
-            </div>
-            <div>
-              <label>Transport</label>
-              <select value={mcpForm.transport} onChange={(e) => setMcpForm({ ...mcpForm, transport: e.target.value })}>
-                <option value="stdio">stdio (local command)</option>
-                <option value="http">http (remote URL)</option>
-              </select>
-            </div>
-            {mcpForm.transport === 'stdio' ? (
-              <>
-                <div>
-                  <label>Command</label>
-                  <input type="text" value={mcpForm.command} onChange={(e) => setMcpForm({ ...mcpForm, command: e.target.value })} placeholder="npx" />
-                </div>
-                <div>
-                  <label>Arguments (space-separated)</label>
-                  <input type="text" value={mcpForm.argsText} onChange={(e) => setMcpForm({ ...mcpForm, argsText: e.target.value })} placeholder="-y @modelcontextprotocol/server-github" />
-                </div>
-              </>
-            ) : (
-              <div>
-                <label>URL</label>
-                <input type="text" value={mcpForm.url} onChange={(e) => setMcpForm({ ...mcpForm, url: e.target.value })} placeholder="https://example.com/mcp" />
-              </div>
-            )}
-            <div>
-              <label>{mcpForm.transport === 'stdio' ? 'Environment (KEY=value per line)' : 'Headers (Name: value per line)'}</label>
-              <textarea
-                className="mcp-secrets-input"
-                rows={3}
-                value={mcpForm.secretsText}
-                onChange={(e) => setMcpForm({ ...mcpForm, secretsText: e.target.value })}
-                placeholder={mcpForm.hasSecrets ? '•••••••• (leave blank to keep)' : mcpForm.transport === 'stdio' ? 'GITHUB_TOKEN=ghp_…' : 'Authorization: Bearer …'}
-              />
-            </div>
-            <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
-              <button className="glass-panel" style={{ padding: '10px', cursor: 'pointer', color: 'var(--text-primary)', flexGrow: 1 }} onClick={() => setMcpForm(null)}>Cancel</button>
-              <button
-                style={{ background: 'var(--accent-color)', color: '#000', border: 'none', borderRadius: '8px', padding: '10px', cursor: 'pointer', fontWeight: 600, flexGrow: 1 }}
-                disabled={!mcpForm.name.trim() || (mcpForm.transport === 'stdio' ? !mcpForm.command.trim() : !mcpForm.url.trim())}
-                onClick={() => {
-                  const def = {
-                    id: mcpForm.id, name: mcpForm.name.trim(), transport: mcpForm.transport,
-                    command: mcpForm.transport === 'stdio' ? mcpForm.command.trim() : undefined,
-                    args: mcpForm.transport === 'stdio' ? mcpForm.argsText.trim().split(/\s+/).filter(Boolean) : undefined,
-                    url: mcpForm.transport === 'http' ? mcpForm.url.trim() : undefined,
-                  };
-                  let rawSecrets;
-                  const lines = mcpForm.secretsText.split('\n').map((l: string) => l.trim()).filter(Boolean);
-                  if (lines.length > 0) {
-                    if (mcpForm.transport === 'stdio') {
-                      const env = {};
-                      for (const l of lines) { const i = l.indexOf('='); if (i > 0) env[l.slice(0, i)] = l.slice(i + 1); }
-                      rawSecrets = { env };
-                    } else {
-                      const headers = {};
-                      for (const l of lines) { const i = l.indexOf(':'); if (i > 0) headers[l.slice(0, i).trim()] = l.slice(i + 1).trim(); }
-                      rawSecrets = { headers };
-                    }
-                  }
-                  window.electron?.upsertMcpServer(def, rawSecrets).then((d: any) => { setMcpData(d); setMcpForm(null); });
-                }}
-              >
-                Save Server
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Permission Request Modal */}
       {permissionQueue.length > 0 && (
@@ -785,7 +640,7 @@ export default function App() {
                   background: 'var(--accent-color)',
                   color: '#000',
                   border: 'none',
-                  borderRadius: '8px',
+                  borderRadius: 'var(--radius-md)',
                   fontWeight: 600
                 }}
               >
@@ -796,44 +651,15 @@ export default function App() {
         </div>
       )}
 
-      {/* Skills Panel */}
-      <SkillsPanel
-        open={showSkillsPanel}
-        onClose={() => setShowSkillsPanel(false)}
-        activeSkillIds={activeSkills.map((s) => s.id)}
-        onToggleSkill={handleToggleSkill}
-      />
-
-      {/* MCP Panel */}
-      <McpPanel
-        open={showMcpPanel}
-        onClose={() => setShowMcpPanel(false)}
-        servers={mcpData.servers}
-        statuses={mcpData.statuses}
-        busy={isTyping}
-        onConnect={(id) => window.electron?.connectMcp(id).then(setMcpData)}
-        onDisconnect={(id) => window.electron?.disconnectMcp(id).then(setMcpData)}
-        onEdit={(server) => setMcpForm({ id: server.id, name: server.name, transport: server.transport, command: server.command ?? '', argsText: (server.args ?? []).join(' '), url: server.url ?? '', secretsText: '', hasSecrets: server.hasSecrets })}
-        onDelete={(id) => window.electron?.deleteMcpServer(id).then(setMcpData)}
-        onAdd={() => setMcpForm({ name: '', transport: 'stdio', command: '', argsText: '', url: '', secretsText: '' })}
-        onAddPreset={handleAddMcpPreset}
-      />
-
-      {/* Sessions Panel */}
-      <SessionsPanel
-        open={showSessionsPanel}
-        onClose={() => setShowSessionsPanel(false)}
-        sessions={sessionList}
-        onSelect={handleSelectSession}
-        onDelete={handleDeleteSession}
-        busy={isTyping}
-      />
+      {/* Main column + sidebar */}
+      <div style={{ display: 'flex', flexDirection: 'row', flex: 1, minHeight: 0, gap: '20px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
 
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <img src="./moon-logo.png" width={28} height={28} alt="Moon Agent" />
-          <h1 style={{ margin: 0, fontSize: '18px', fontWeight: 600 }}>Moon Agent</h1>
+          <img src="./moon-logo.png" width={28} height={28} alt="Moon Code" />
+          <h1 style={{ margin: 0, fontSize: '16px', fontWeight: 700, letterSpacing: '-0.02em' }}>Moon Code</h1>
         </div>
 
         <div style={{ display: 'flex', gap: '10px' }}>
@@ -847,33 +673,12 @@ export default function App() {
           </button>
 
           <button
-            onClick={async () => {
-              const list = await window.electron?.listSessions();
-              setSessionList(list ?? []);
-              setShowSessionsPanel(true);
-            }}
-            className="glass-panel"
-            style={{ display: 'flex', alignItems: 'center', padding: '8px 12px', color: 'var(--text-primary)', cursor: 'pointer' }}
-            title="Sessions"
-          >
-            <History size={16} />
-          </button>
-
-          <button
             onClick={startNewChat}
             className="glass-panel"
             style={{ display: 'flex', alignItems: 'center', padding: '8px 12px', color: 'var(--text-primary)', cursor: 'pointer' }}
             title="New Chat"
           >
             <Plus size={16} />
-          </button>
-
-          <button
-            onClick={() => setShowSettings(true)}
-            className="glass-panel"
-            style={{ display: 'flex', alignItems: 'center', padding: '8px 12px', color: 'var(--text-primary)', cursor: 'pointer' }}
-          >
-            <Settings size={16} />
           </button>
         </div>
       </div>
@@ -882,7 +687,7 @@ export default function App() {
       <div className="chat-container glass-panel" style={{ flexGrow: 1, overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
         {messages.length === 0 ? (
           <div style={{ margin: 'auto', textAlign: 'center', color: 'var(--text-secondary)' }}>
-            <h2>How can I help you code today?</h2>
+            <h2 style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text-primary)' }}>How can I help you code today?</h2>
             <p>Select a workspace and start chatting.</p>
           </div>
         ) : (
@@ -940,12 +745,9 @@ export default function App() {
           disabled={inputDisabled}
           placeholder={inputPlaceholder}
           skills={activeSkills}
-          onAddSkill={() => setShowSkillsPanel(true)}
+          onAddSkill={() => setSidebarTab('skills')}
           mcpServers={connectedMcpServers}
-          onConnectMcp={() => {
-            setShowMcpPanel(true);
-            window.electron?.mcpList?.().then((d: any) => d && setMcpData(d));
-          }}
+          onConnectMcp={() => setSidebarTab('mcp')}
           profiles={config?.profiles ?? []}
           activeProfileId={config?.activeProfileId ?? null}
           onSelectProfile={(id) => window.electron?.setActiveProfile(id).then(setConfig)}
@@ -955,6 +757,39 @@ export default function App() {
           contextInfo={displayContext}
           capabilities={activeLimits.capabilities}
         />
+      </div>
+
+      </div>
+
+      <Sidebar
+        activeTab={sidebarTab}
+        onTabChange={setSidebarTab}
+        activeSkillIds={activeSkills.map((s) => s.id)}
+        onToggleSkill={handleToggleSkill}
+        discoveredSkills={discoveredSkills}
+        invokedSkillIds={invokedSkills}
+        onInvokeSkill={(id: string) => { invokeSkillById(id); setSidebarTab(null); }}
+        onCreateSkill={handleCreateSkill}
+        mcpData={mcpData}
+        busy={isTyping}
+        onConnectMcpServer={(id: string) => window.electron?.connectMcp(id).then(setMcpData)}
+        onDisconnectMcpServer={(id: string) => window.electron?.disconnectMcp(id).then(setMcpData)}
+        onSaveMcpServer={(def: any, secrets: any) => window.electron?.upsertMcpServer(def, secrets).then(setMcpData)}
+        onDeleteMcpServer={(id: string) => window.electron?.deleteMcpServer(id).then(setMcpData)}
+        onAddMcpPreset={handleAddMcpPreset}
+        sessions={sessionList}
+        onSelectSession={handleSelectSession}
+        onDeleteSession={handleDeleteSession}
+        config={config}
+        onSetActiveProfile={(id: string) => window.electron?.setActiveProfile(id).then(setConfig)}
+        onSaveProfile={(profile: any, apiKey?: string) => window.electron?.upsertProfile(profile, apiKey).then(setConfig)}
+        onDeleteProfile={(id: string) => window.electron?.deleteProfile(id).then(setConfig)}
+        sessionUsage={sessionUsage}
+        contextInfo={displayContext}
+        activeProfile={activeProfile}
+        activeLimits={activeLimits}
+      />
+
       </div>
     </div>
   );
