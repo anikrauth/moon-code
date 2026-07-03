@@ -77,7 +77,7 @@ test('abort during compaction cancels promptly', { timeout: 5000 }, async (t) =>
   const events = [];
   const started = Date.now();
   await new Promise((resolve) => {
-    handlePrompt('go', process.cwd(), { apiKey: 'k', baseUrl: `http://127.0.0.1:${server.address().port}/v1`, model: 'mock' }, huge,
+    handlePrompt('go', process.cwd(), { apiKey: 'k', baseUrl: `http://127.0.0.1:${server.address().port}/v1`, model: 'mock', contextWindow: 60000 }, huge,
       (e) => { events.push(e); if (e.type === 'status' && e.content) setTimeout(() => ac.abort(), 100); if (e.type === 'done') resolve(); },
       async () => true, ac.signal);
   });

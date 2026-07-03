@@ -95,6 +95,8 @@ button, input, select, textarea, .chat-container, .rich-input-container {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  max-height: 80vh;
+  overflow-y: auto;
 }
 
 .modal-content input, .modal-content select {
@@ -145,74 +147,6 @@ button, input, select, textarea, .chat-container, .rich-input-container {
    disabled attributes; the Stop button and profile switcher stay active). */
 .rich-input-disabled {
   opacity: 0.65;
-}
-
-/* ---- Chips row ---- */
-.rich-input-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 10px 14px 0;
-}
-
-.ri-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 8px 3px 6px;
-  border-radius: 8px;
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1;
-  white-space: nowrap;
-  animation: chipIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-@keyframes chipIn {
-  from { opacity: 0; transform: scale(0.9) translateY(4px); }
-  to   { opacity: 1; transform: scale(1) translateY(0); }
-}
-
-.ri-chip-skill {
-  background: rgba(203, 139, 92, 0.15);
-  color: var(--accent-color);
-  border: 1px solid rgba(203, 139, 92, 0.25);
-}
-
-.ri-chip-mcp {
-  background: rgba(52, 211, 153, 0.12);
-  color: var(--success-color);
-  border: 1px solid rgba(52, 211, 153, 0.2);
-}
-
-.ri-chip-label {
-  max-width: 120px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.ri-chip-meta {
-  font-size: 10px;
-  opacity: 0.7;
-  padding-left: 2px;
-}
-
-.ri-chip-remove {
-  all: unset;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-  border-radius: 4px;
-  cursor: pointer;
-  opacity: 0.6;
-  transition: opacity 0.15s, background 0.15s;
-}
-
-.ri-chip-remove:hover {
-  opacity: 1;
-  background: rgba(255, 255, 255, 0.1);
 }
 
 /* ---- Textarea ---- */
@@ -300,6 +234,56 @@ button, input, select, textarea, .chat-container, .rich-input-container {
   background: var(--accent-color);
   color: #000;
   line-height: 1;
+}
+
+/* ---- Context window indicator ---- */
+.ri-context-chip {
+  margin-left: auto;
+  margin-right: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  cursor: default;
+}
+
+.ri-context-warn {
+  color: var(--warning-color);
+}
+
+.ri-context-danger {
+  color: var(--danger-color);
+}
+
+/* ---- Context-limit warning banner ---- */
+.context-warning-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 8px 14px;
+  font-size: 13px;
+  color: var(--warning-color);
+  border: 1px solid var(--warning-color);
+}
+
+.context-warning-action {
+  all: unset;
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--warning-color);
+  border: 1px solid var(--warning-color);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+
+.context-warning-action:hover {
+  background: rgba(255, 200, 0, 0.1);
 }
 
 /* ---- Send button ---- */
@@ -761,4 +745,47 @@ button, input, select, textarea, .chat-container, .rich-input-container {
 .mcp-preset-hint {
   color: var(--warning-color);
   font-size: 11px;
+}
+
+/* ---- Slash command menu ---- */
+.rich-input-container {
+  position: relative;
+}
+.ri-cmd-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  background: var(--panel-bg);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+  z-index: 50;
+}
+.ri-cmd-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.ri-cmd-item:hover, .ri-cmd-active {
+  background: var(--surface-hover);
+}
+.ri-cmd-name {
+  color: var(--accent-color);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.ri-cmd-desc {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

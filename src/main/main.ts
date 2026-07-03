@@ -1,18 +1,24 @@
 // @ts-nocheck
 import { app, BrowserWindow, ipcMain, dialog, safeStorage } from 'electron';
 import * as path from 'path';
-import { handlePrompt } from './agent';
+import { handlePrompt, forceCompact } from './agent';
 import { createConfigStore } from './configStore';
 import { createSessionStore } from './sessionStore';
 import { createMcpManager } from './mcpManager';
+import { SKILL_CATALOG } from '../shared/skillCatalog';
+
+app.name = 'Moon Agent';
 
 let mainWindow: BrowserWindow | null = null;
+
+const appIconPath = path.join(__dirname, '../../build/icon.png');
 
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1000,
     height: 800,
     titleBarStyle: 'hiddenInset',
+    icon: appIconPath,
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),
       nodeIntegration: false,
@@ -32,6 +38,11 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  // Packaged builds get their icon from the electron-builder icns; this path
+  // only exists in the repo checkout, so setting it there would throw.
+  if (process.platform === 'darwin' && !app.isPackaged) {
+    app.dock.setIcon(appIconPath);
+  }
   createWindow();
 
   ipcMain.handle('dialog:openDirectory', async () => {
@@ -126,7 +137,7 @@ app.whenReady().then(() => {
     pendingPermissions.clear();
   };
 
-  ipcMain.on('agent:prompt', (event, prompt: string, workspace: string, profileId: string, history: any) => {
+  ipcMain.on('agent:prompt', (event, prompt: string, workspace: string, profileId: string, history: any, meta?: { lastInputTokens?: number }) => {
     const settings = configStore.resolveSettings(profileId);
     if (!settings) {
       event.reply('agent:event', { type: 'error', agent: 'main', content: 'Selected model profile has no API key. Open Settings and configure one.' });
@@ -150,9 +161,15 @@ app.whenReady().then(() => {
         event.reply('agent:event', { type: 'permission_request', id, name, arguments: args, agent: agentId });
       });
     };
+    const activeSkills = configStore.getConfig().activeSkillIds
+        .map((sid) => SKILL_CATALOG.find((s) => s.id === sid))
+        .filter(Boolean);
+    const skillsText = activeSkills.length
+        ? 'ACTIVE SKILLS — follow these working practices:\n\n' + activeSkills.map((s) => `${s.name}:\n${s.instructions}`).join('\n\n')
+        : '';
     handlePrompt(prompt, workspace, settings, history, (agentEvent) => {
       event.reply('agent:event', agentEvent);
-    }, requestPermission, activeTurn.signal, mcpManager.getAgentTools());
+    }, requestPermission, activeTurn.signal, mcpManager.getAgentTools(), skillsText, meta);
   });
 
   ipcMain.on('agent:permission-response', (_event, id: string, allow: boolean, alwaysAllow: boolean) => {
@@ -166,6 +183,17 @@ app.whenReady().then(() => {
   ipcMain.on('agent:cancel', () => {
     activeTurn?.abort();
     flushPendingPermissions();
+  });
+
+  ipcMain.handle('agent:compact', async (event, profileId: string, history: any) => {
+    try {
+        const settings = configStore.resolveSettings(profileId);
+        if (!settings) return { ok: false, error: 'Selected model profile has no API key.' };
+        const compacted = await forceCompact(history ?? [], settings, (e) => event.sender.send('agent:event', e));
+        return { ok: true, history: compacted };
+    } catch (e) {
+        return { ok: false, error: e?.message ?? String(e) };
+    }
   });
 
   app.on('activate', function () {

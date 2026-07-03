@@ -24,8 +24,15 @@ Main process owns all configuration. Renderer sees a **redacted** view (no key m
 {
   "version": 1,
   "profiles": [
-    { "id": "p-<uuid>", "name": "GPT-4o (work)", "provider": "OpenAI",
-      "model": "gpt-4o", "baseUrl": "", "apiKeyEnc": "<base64>", "enc": true }
+    {
+      "id": "p-<uuid>",
+      "name": "GPT-4o (work)",
+      "provider": "OpenAI",
+      "model": "gpt-4o",
+      "baseUrl": "",
+      "apiKeyEnc": "<base64>",
+      "enc": true
+    }
   ],
   "activeProfileId": "p-…",
   "activeSkillIds": ["web-search"],
@@ -52,14 +59,14 @@ Factory `createConfigStore({ dir, safeStorage })` (dependencies injected for tes
 
 ### 3. IPC surface (main.ts + preload)
 
-| Channel | Direction | Payload → Result |
-|---|---|---|
-| `config:get` | invoke | → redacted config |
-| `config:upsertProfile` | invoke | `(profile, rawApiKey?)` → redacted config |
-| `config:deleteProfile` | invoke | `(id)` → redacted config |
-| `config:setActiveProfile` | invoke | `(id)` → redacted config |
-| `config:setSkillIds` | invoke | `(ids)` → redacted config |
-| `config:setMcpIds` | invoke | `(ids)` → redacted config |
+| Channel                   | Direction | Payload → Result                          |
+| ------------------------- | --------- | ----------------------------------------- |
+| `config:get`              | invoke    | → redacted config                         |
+| `config:upsertProfile`    | invoke    | `(profile, rawApiKey?)` → redacted config |
+| `config:deleteProfile`    | invoke    | `(id)` → redacted config                  |
+| `config:setActiveProfile` | invoke    | `(id)` → redacted config                  |
+| `config:setSkillIds`      | invoke    | `(ids)` → redacted config                 |
+| `config:setMcpIds`        | invoke    | `(ids)` → redacted config                 |
 
 All mutators return the fresh redacted config so the renderer state is always the store's echo.
 
@@ -68,7 +75,7 @@ All mutators return the fresh redacted config so the renderer state is always th
 ### 4. Renderer
 
 - **App state**: `config` (redacted) replaces the old `settings` state; loaded once at startup via `config:get`.
-- **Settings modal → profile manager**: list of profiles (name, provider · model, active indicator, Edit, Delete) + "Add profile" form (name, provider select, model, baseUrl, API key). Provider select only pre-fills defaults in the form for NEW profiles — editing never auto-overwrites saved values. Key input shows placeholder `••••••••` when `hasKey`; leaving it blank on edit keeps the stored key.
+- **Settings modal → profile manager**: list of profiles (name, provider · model, active indicator, Edit, Delete) + "Add model" form (name, provider select, model, baseUrl, API key). Provider select only pre-fills defaults in the form for NEW profiles — editing never auto-overwrites saved values. Key input shows placeholder `••••••••` when `hasKey`; leaving it blank on edit keeps the stored key.
 - **Model switcher in input bar**: dropdown chip in `RichInput` toolbar (left of Skills button) listing profile names, active one checked; selection calls `config:setActiveProfile`. RichInput receives `profiles`, `activeProfileId`, `onSelectProfile` props.
 - **Send gating**: input disabled when no active profile or active profile `hasKey === false`; placeholder text guides ("Add a model profile in Settings…").
 - **Skills/MCP**: toggle handlers additionally call `config:setSkillIds`/`config:setMcpIds` with the new id list; startup effect restores `activeSkills` (ids mapped through `SKILL_CATALOG`) and `mcpServers`/`mcpStatuses` (ids mapped through `MCP_CATALOG`, status `connected` immediately — no fake connecting delay on restore). Persisted ids not present in a catalog are silently dropped (and pruned on next save).

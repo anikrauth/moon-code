@@ -16,10 +16,13 @@ dotenv.config();
 
 import { catalog } from '../shared/uiCatalog';
 import { globSearch, grepSearch } from './searchTools';
+import { resolveLimits } from '../shared/modelLimits';
 
 const MAX_HISTORY = 20;
 const KEEP_RECENT = 8;
-const HISTORY_TOKEN_BUDGET = 40000;
+// Rough allowance for the system prompt + tool schemas when only a chars/4
+// estimate of the history is available (no real usage reported yet).
+const SYSTEM_OVERHEAD_EST = 4000;
 const estimateTokens = (s) => Math.ceil(s.length / 4);
 const historyTokens = (history) => history.reduce((sum, m) =>
     sum + estimateTokens(typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '')), 0);
@@ -53,12 +56,25 @@ function sliceHistory(history) {
     return history.slice(cutIndex);
 }
 
+// The token budget is derived from the model's context window: reserve room for
+// the response (capped at a quarter of the window so huge-output models don't eat
+// it), then compact once the estimated prompt exceeds 75% of what remains.
 // Known limitation: the kept KEEP_RECENT tail is not itself token-bounded, so a
-// tail of large capped tool results can exceed HISTORY_TOKEN_BUDGET and re-trigger
+// tail of large capped tool results can exceed the budget and re-trigger
 // compaction on consecutive turns. The Math.max(2, ...) cut floor guarantees at
 // least two messages are summarized per pass, so this converges and never loops.
-async function compactHistory(history, settings, onEvent, abortSignal) {
-    if (!history || (history.length <= MAX_HISTORY && historyTokens(history) <= HISTORY_TOKEN_BUDGET)) return history;
+// lastInputTokens (real usage observed on the previous turn) is only consulted
+// for the trigger and never re-checked after compaction within a turn, so a
+// stale value cannot cause a loop either.
+async function compactHistory(history, settings, onEvent, abortSignal, force = false, limits, lastInputTokens) {
+    if (!history || history.length <= 2) return history;
+    limits = limits ?? resolveLimits(settings?.model, settings);
+    const reserve = Math.min(limits.maxOutputTokens, Math.floor(limits.contextWindow * 0.25));
+    const budget = Math.floor(0.75 * (limits.contextWindow - reserve));
+    const promptTokens = (Number.isFinite(lastInputTokens) && lastInputTokens > 0)
+        ? lastInputTokens
+        : historyTokens(history) + SYSTEM_OVERHEAD_EST;
+    if (!force && history.length <= MAX_HISTORY && promptTokens <= budget) return history;
     let cut = Math.max(2, history.length - KEEP_RECENT);
     while (cut < history.length && history[cut].role === 'tool') cut++;
     const old = history.slice(0, cut);
@@ -84,6 +100,10 @@ async function compactHistory(history, settings, onEvent, abortSignal) {
     }
 }
 
+export async function forceCompact(history, settings, onEvent) {
+    return compactHistory(history, settings, onEvent, undefined, true);
+}
+
 async function loadProjectMemory(workspace: string): Promise<string> {
     try {
         const content = await fs.promises.readFile(path.join(workspace, MEMORY_FILE), 'utf-8');
@@ -93,7 +113,7 @@ async function loadProjectMemory(workspace: string): Promise<string> {
     }
 }
 
-function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpawn, settings, spawnState, abortSignal, extraTools }) {
+function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpawn, settings, spawnState, abortSignal, extraTools, limits }) {
     const emit = (e) => onEvent({ agent: agentId, ...e });
     const denied = (name) => {
         const res = 'User denied permission for this action.';
@@ -307,13 +327,14 @@ function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpaw
                 const subId = `sub-${++spawnState.counter}`;
                 emit({ type: 'tool_call', name: 'spawn_agent', arguments: JSON.stringify({ task }) });
                 const subSystemPrompt = `You are a Moon Agent subagent working autonomously in the workspace at ${workspace}. Complete the following task using your tools, then reply with concise plain-text findings. Do not ask questions; do not output JSON UI specs.
-${spawnState.projectMemory ? `\nPROJECT INSTRUCTIONS (from MOON.md in the workspace root — follow these):\n${spawnState.projectMemory}\n` : ''}`;
+${spawnState.projectMemory ? `\nPROJECT INSTRUCTIONS (from MOON.md in the workspace root — follow these):\n${spawnState.projectMemory}\n` : ''}
+${spawnState.skillsText ? `\n${spawnState.skillsText}\n` : ''}`;
                 try {
-                    const subTools = makeTools({ workspace, onEvent, requestPermission, agentId: subId, includeSpawn: false, settings, spawnState, abortSignal, extraTools });
+                    const subTools = makeTools({ workspace, onEvent, requestPermission, agentId: subId, includeSpawn: false, settings, spawnState, abortSignal, extraTools, limits });
                     const { text } = await runAgentLoop({
                         prompt: task, workspace, settings, history: [],
                         onEvent, requestPermission, agentId: subId,
-                        tools: subTools, systemPrompt: subSystemPrompt, emitText: false, abortSignal,
+                        tools: subTools, systemPrompt: subSystemPrompt, emitText: false, abortSignal, limits,
                     });
                     const res = text?.trim() ? truncateOutput(text) : 'Subagent finished with no output.';
                     onEvent({ type: 'tool_result', name: 'spawn_agent', agent: agentId, result: res });
@@ -350,11 +371,28 @@ ${spawnState.projectMemory ? `\nPROJECT INSTRUCTIONS (from MOON.md in the worksp
     return tools;
 }
 
-async function runAgentLoop({ prompt, workspace, settings, history, onEvent, requestPermission, agentId, tools, systemPrompt, emitText, abortSignal }) {
+// ai@7 usage numbers are all optional and provider-dependent; normalize in one
+// place. Returns null when the provider reported nothing usable so callers can
+// fall back to estimates instead of trusting zeros.
+function normalizeUsage(u) {
+    if (!u) return null;
+    if (u.inputTokens == null && u.outputTokens == null && u.totalTokens == null) return null;
+    const inputTokens = u.inputTokens ?? 0;
+    const outputTokens = u.outputTokens ?? 0;
+    return {
+        inputTokens,
+        outputTokens,
+        cachedInputTokens: u.inputTokenDetails?.cacheReadTokens ?? 0,
+        totalTokens: u.totalTokens ?? (inputTokens + outputTokens),
+    };
+}
+
+async function runAgentLoop({ prompt, workspace, settings, history, onEvent, requestPermission, agentId, tools, systemPrompt, emitText, abortSignal, limits }) {
     const customOpenAI = createOpenAI({
         apiKey: settings.apiKey,
         baseURL: settings.baseUrl || undefined,
     });
+    limits = limits ?? resolveLimits(settings?.model, settings);
     const userMsg = { role: 'user', content: prompt };
     const result = streamText({
         model: customOpenAI.chat(settings.model || 'gpt-4o'),
@@ -362,18 +400,39 @@ async function runAgentLoop({ prompt, workspace, settings, history, onEvent, req
         messages: [...(history ?? []), userMsg],
         tools,
         abortSignal,
+        maxOutputTokens: limits.maxOutputTokens,
         stopWhen: stepCountIs(MAX_STEPS),
     });
 
+    // Context fullness comes from the LAST step's usage (the prompt size of the
+    // final model call); 'finish' totalUsage sums input tokens across all
+    // tool-loop steps and only makes sense for session accounting.
+    let lastStepUsage = null;
+    let turnUsage = null;
     for await (const part of result.fullStream) {
         if (part.type === 'text-delta') {
             if (emitText) onEvent({ type: 'message', agent: agentId, content: part.text });
+        } else if (part.type === 'finish-step') {
+            lastStepUsage = part.usage;
+        } else if (part.type === 'finish') {
+            turnUsage = part.totalUsage;
         } else if (part.type === 'error') {
             throw part.error instanceof Error ? part.error : new Error(String(part.error));
         }
     }
 
-    return { text: await result.text, responseMessages: await result.responseMessages };
+    const usage = { total: normalizeUsage(turnUsage), lastStep: normalizeUsage(lastStepUsage) };
+    const contextPct = usage.lastStep && limits.contextWindow > 0
+        ? Math.min(1, (usage.lastStep.inputTokens + usage.lastStep.outputTokens) / limits.contextWindow)
+        : null;
+    onEvent({
+        type: 'usage', agent: agentId,
+        usage: usage.total, lastStep: usage.lastStep,
+        limits: { contextWindow: limits.contextWindow, maxOutputTokens: limits.maxOutputTokens },
+        contextPct,
+    });
+
+    return { text: await result.text, responseMessages: await result.responseMessages, usage };
 }
 
 export async function handlePrompt(
@@ -385,14 +444,18 @@ export async function handlePrompt(
     requestPermission: (name: string, args: any, agentId: string) => Promise<boolean>,
     abortSignal?: AbortSignal,
     extraTools?: any,
+    skillsText?: string,
+    usageHint?: { lastInputTokens?: number },
 ) {
     try {
-        history = await compactHistory(history, settings, onEvent, abortSignal);
+        const limits = resolveLimits(settings?.model, settings);
+        history = await compactHistory(history, settings, onEvent, abortSignal, false, limits, usageHint?.lastInputTokens);
 
         const projectMemory = await loadProjectMemory(workspace);
 
         const systemPrompt = `You are Moon Agent, an advanced coding agentic IDE for Mac. You have full access to the user's workspace at ${workspace}. You must use tools to accomplish the user's requests autonomously. Do NOT wait for the user if you can figure it out. Answer concisely. Use grep_search and glob_search to find code instead of running grep or find through run_command.
 ${projectMemory ? `\nPROJECT INSTRUCTIONS (from ${MEMORY_FILE} in the workspace root — follow these):\n${projectMemory}\n` : ''}
+${skillsText ? `\n${skillsText}\n` : ''}
 ${catalog.prompt({
             system: 'Your final answer to the user must be valid UI spec JSONL (SpecStream format), not plain prose.',
             customRules: [
@@ -407,18 +470,18 @@ ${catalog.prompt({
 
         const tools = makeTools({
             workspace, onEvent, requestPermission, agentId: 'main',
-            includeSpawn: true, settings, spawnState: { counter: 0, projectMemory }, abortSignal, extraTools,
+            includeSpawn: true, settings, spawnState: { counter: 0, projectMemory, skillsText: skillsText ?? '' }, abortSignal, extraTools, limits,
         });
 
-        const { responseMessages } = await runAgentLoop({
+        const { responseMessages, usage } = await runAgentLoop({
             prompt, workspace, settings, history, onEvent, requestPermission,
-            agentId: 'main', tools, systemPrompt, emitText: true, abortSignal,
+            agentId: 'main', tools, systemPrompt, emitText: true, abortSignal, limits,
         });
 
         const userMsg = { role: 'user', content: prompt };
         const newHistory = [...(history ?? []), userMsg, ...responseMessages];
 
-        onEvent({ type: 'done', history: newHistory });
+        onEvent({ type: 'done', history: newHistory, usage });
     } catch (error: any) {
         const cancelled = abortSignal?.aborted;
         onEvent({ type: 'error', agent: 'main', content: cancelled ? 'Cancelled.' : error.message });

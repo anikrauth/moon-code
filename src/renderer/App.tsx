@@ -1,8 +1,10 @@
 // @ts-nocheck
 import React, { useState, useEffect, useRef } from 'react';
-import { FolderOpen, Settings, Bot, X, Plus, History } from 'lucide-react';
+import { FolderOpen, Settings, X, Plus, History } from 'lucide-react';
 import RichInput, { SkillItem } from './RichInput';
-import SkillsPanel, { SkillEntry, SKILL_CATALOG } from './SkillsPanel';
+import SkillsPanel from './SkillsPanel';
+import { SKILL_CATALOG } from '../shared/skillCatalog';
+import { resolveLimits } from '../shared/modelLimits';
 import McpPanel from './McpPanel';
 import SessionsPanel from './SessionsPanel';
 import { JSONUIProvider, Renderer } from '@json-render/react';
@@ -118,13 +120,26 @@ export default function App() {
   const [sessionList, setSessionList] = useState<any[]>([]);
   const [showSessionsPanel, setShowSessionsPanel] = useState(false);
 
+  /* ---- Usage / context-limit state ----
+     Refs are the source of truth: the agent-event listener registers once and
+     must both read and write these synchronously (a `usage` event is followed
+     by a `done` event that persists them before React re-renders). State
+     mirrors the refs for display. */
+  const EMPTY_SESSION_USAGE = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, turns: 0 };
+  const [sessionUsage, setSessionUsage] = useState(EMPTY_SESSION_USAGE);
+  const sessionUsageRef = useRef(EMPTY_SESSION_USAGE);
+  const [contextInfo, setContextInfo] = useState<any>(null);
+  const contextInfoRef = useRef<any>(null);
+  const setSessionUsageBoth = (u: any) => { sessionUsageRef.current = u; setSessionUsage(u); };
+  const setContextInfoBoth = (c: any) => { contextInfoRef.current = c; setContextInfo(c); };
+
   const applyConfig = (c: any) => {
     setConfig(c);
     setActiveSkills(
-        c.activeSkillIds
-            .map((id: string) => SKILL_CATALOG.find((s) => s.id === id))
-            .filter(Boolean)
-            .map((s: any) => ({ id: s.id, name: s.name, description: s.description }))
+      c.activeSkillIds
+        .map((id: string) => SKILL_CATALOG.find((s) => s.id === id))
+        .filter(Boolean)
+        .map((s: any) => ({ id: s.id, name: s.name, description: s.description }))
     );
   };
 
@@ -168,6 +183,7 @@ export default function App() {
               workspace: snap.workspace,
               messages: snap.messages,
               history: event.history,
+              usage: { context: contextInfoRef.current, session: sessionUsageRef.current },
             };
             saveChainRef.current = saveChainRef.current
               .then(async () => {
@@ -190,6 +206,34 @@ export default function App() {
         }
         return;
       }
+      if (event.type === 'usage') {
+        if (event.usage) {
+          const prev = sessionUsageRef.current;
+          const next = {
+            inputTokens: prev.inputTokens + (event.usage.inputTokens ?? 0),
+            outputTokens: prev.outputTokens + (event.usage.outputTokens ?? 0),
+            cachedInputTokens: prev.cachedInputTokens + (event.usage.cachedInputTokens ?? 0),
+            turns: prev.turns + ((event.agent ?? 'main') === 'main' ? 1 : 0),
+          };
+          sessionUsageRef.current = next;
+          setSessionUsage(next);
+        }
+        // Context fullness only tracks the main agent's final call; subagents
+        // run their own prompts and only matter for session accounting above.
+        if ((event.agent ?? 'main') === 'main' && event.lastStep && event.limits) {
+          const info = {
+            lastInputTokens: event.lastStep.inputTokens,
+            lastOutputTokens: event.lastStep.outputTokens,
+            contextWindow: event.limits.contextWindow,
+            maxOutputTokens: event.limits.maxOutputTokens,
+            pct: event.contextPct ?? 0,
+            estimated: false,
+          };
+          contextInfoRef.current = info;
+          setContextInfo(info);
+        }
+        return;
+      }
       if (event.type === 'permission_request') {
         setPermissionQueue(prev => [...prev, event]);
         return;
@@ -204,35 +248,35 @@ export default function App() {
         const lastMsg = newMsgs[lastIdx];
 
         if (event.type === 'message') {
-            if (lastMsg && lastMsg.role === 'assistant') {
-                newMsgs[lastIdx] = { ...lastMsg, content: lastMsg.content + event.content };
-            } else {
-                newMsgs.push({ id: Date.now().toString(), role: 'assistant', content: event.content });
-            }
+          if (lastMsg && lastMsg.role === 'assistant') {
+            newMsgs[lastIdx] = { ...lastMsg, content: lastMsg.content + event.content };
+          } else {
+            newMsgs.push({ id: Date.now().toString(), role: 'assistant', content: event.content });
+          }
         } else if (event.type === 'tool_call') {
-            if (lastMsg && lastMsg.role === 'assistant') {
-                newMsgs[lastIdx] = { ...lastMsg, toolCalls: [...(lastMsg.toolCalls || []), event] };
-            } else {
-                newMsgs.push({ id: Date.now().toString(), role: 'assistant', content: '', toolCalls: [event] });
-            }
+          if (lastMsg && lastMsg.role === 'assistant') {
+            newMsgs[lastIdx] = { ...lastMsg, toolCalls: [...(lastMsg.toolCalls || []), event] };
+          } else {
+            newMsgs.push({ id: Date.now().toString(), role: 'assistant', content: '', toolCalls: [event] });
+          }
         } else if (event.type === 'tool_result') {
-            if (lastMsg && lastMsg.toolCalls) {
-                const callIdx = lastMsg.toolCalls.findIndex((c: any) =>
-                    c.name === event.name && (c.agent ?? 'main') === (event.agent ?? 'main') && !c.result);
-                if (callIdx !== -1) {
-                    const toolCalls = [...lastMsg.toolCalls];
-                    toolCalls[callIdx] = { ...toolCalls[callIdx], result: event.result };
-                    newMsgs[lastIdx] = { ...lastMsg, toolCalls };
-                }
+          if (lastMsg && lastMsg.toolCalls) {
+            const callIdx = lastMsg.toolCalls.findIndex((c: any) =>
+              c.name === event.name && (c.agent ?? 'main') === (event.agent ?? 'main') && !c.result);
+            if (callIdx !== -1) {
+              const toolCalls = [...lastMsg.toolCalls];
+              toolCalls[callIdx] = { ...toolCalls[callIdx], result: event.result };
+              newMsgs[lastIdx] = { ...lastMsg, toolCalls };
             }
+          }
         } else if (event.type === 'error') {
-            if (lastMsg && lastMsg.role === 'assistant' && lastMsg.toolCalls) {
-                newMsgs[lastIdx] = {
-                    ...lastMsg,
-                    toolCalls: lastMsg.toolCalls.map((c: any) => c.result ? c : { ...c, result: 'aborted' }),
-                };
-            }
-            newMsgs.push({ id: Date.now().toString(), role: 'assistant', content: `Error: ${event.content}` });
+          if (lastMsg && lastMsg.role === 'assistant' && lastMsg.toolCalls) {
+            newMsgs[lastIdx] = {
+              ...lastMsg,
+              toolCalls: lastMsg.toolCalls.map((c: any) => c.result ? c : { ...c, result: 'aborted' }),
+            };
+          }
+          newMsgs.push({ id: Date.now().toString(), role: 'assistant', content: `Error: ${event.content}` });
         }
         return newMsgs;
       });
@@ -243,39 +287,39 @@ export default function App() {
     if (configLoadStarted) return;
     configLoadStarted = true;
     (async () => {
-        if (!window.electron?.getConfig) return;
-        let c = await window.electron.getConfig();
-        if (c.profiles.length === 0) {
-            const saved = localStorage.getItem('moon-agent-settings');
-            if (saved) {
-                let old: any = null;
-                try {
-                    old = JSON.parse(saved);
-                } catch {
-                    // unparseable legacy settings — drop them
-                    localStorage.removeItem('moon-agent-settings');
-                }
-                if (old && old.apiKey) {
-                    try {
-                        c = await window.electron.upsertProfile(
-                            { name: 'Default', provider: old.provider || 'OpenAI', model: old.model || 'gpt-4o', baseUrl: old.baseUrl || '' },
-                            old.apiKey
-                        );
-                        // Only drop the legacy copy once the migrated profile is durably
-                        // confirmed to have a key on the main-side config; otherwise a
-                        // silent persist failure would discard the user's only API key.
-                        if (c.profiles.some((p: any) => p.hasKey)) localStorage.removeItem('moon-agent-settings');
-                    } catch {
-                        // IPC call rejected — keep the legacy entry so the next launch retries
-                    }
-                }
+      if (!window.electron?.getConfig) return;
+      let c = await window.electron.getConfig();
+      if (c.profiles.length === 0) {
+        const saved = localStorage.getItem('moon-agent-settings');
+        if (saved) {
+          let old: any = null;
+          try {
+            old = JSON.parse(saved);
+          } catch {
+            // unparseable legacy settings — drop them
+            localStorage.removeItem('moon-agent-settings');
+          }
+          if (old && old.apiKey) {
+            try {
+              c = await window.electron.upsertProfile(
+                { name: 'Default', provider: old.provider || 'OpenAI', model: old.model || 'gpt-4o', baseUrl: old.baseUrl || '' },
+                old.apiKey
+              );
+              // Only drop the legacy copy once the migrated profile is durably
+              // confirmed to have a key on the main-side config; otherwise a
+              // silent persist failure would discard the user's only API key.
+              if (c.profiles.some((p: any) => p.hasKey)) localStorage.removeItem('moon-agent-settings');
+            } catch {
+              // IPC call rejected — keep the legacy entry so the next launch retries
             }
+          }
         }
-        applyConfig(c);
-        window.electron?.mcpList?.().then((d: any) => d && setMcpData(d));
-        window.electron?.onMcpEvent?.((evt: any) => {
-            setMcpData((prev: any) => ({ ...prev, statuses: { ...prev.statuses, [evt.id]: { status: evt.status, toolCount: evt.toolCount, message: evt.message } } }));
-        });
+      }
+      applyConfig(c);
+      window.electron?.mcpList?.().then((d: any) => d && setMcpData(d));
+      window.electron?.onMcpEvent?.((evt: any) => {
+        setMcpData((prev: any) => ({ ...prev, statuses: { ...prev.statuses, [evt.id]: { status: evt.status, toolCount: evt.toolCount, message: evt.message } } }));
+      });
     })();
   }, []);
 
@@ -284,6 +328,8 @@ export default function App() {
     setMessages([]);
     setHistory(undefined);
     setCurrentSessionId(null);
+    setSessionUsageBoth(EMPTY_SESSION_USAGE);
+    setContextInfoBoth(null);
   };
 
   const selectWorkspace = async () => {
@@ -296,10 +342,25 @@ export default function App() {
   };
 
   const activeProfile = config?.profiles.find((p: any) => p.id === config.activeProfileId) ?? null;
+  const activeLimits = resolveLimits(activeProfile?.model, activeProfile ?? undefined);
+
+  /* Live context display: real reported usage when we have it, otherwise a
+     chars/4 estimate of the pending history (marked with ~ in the UI). */
+  const estimateHistoryTokens = (h: any[] | undefined) =>
+    (h ?? []).reduce((sum: number, m: any) =>
+      sum + Math.ceil((typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '')).length / 4), 0);
+  const displayContext = contextInfo ?? (history?.length ? {
+    lastInputTokens: estimateHistoryTokens(history),
+    lastOutputTokens: 0,
+    contextWindow: activeLimits.contextWindow,
+    maxOutputTokens: activeLimits.maxOutputTokens,
+    pct: Math.min(1, estimateHistoryTokens(history) / activeLimits.contextWindow),
+    estimated: true,
+  } : null);
 
   const connectedMcpServers = mcpData.servers
-      .filter((s: any) => mcpData.statuses[s.id]?.status === 'connected')
-      .map((s: any) => ({ id: s.id, name: s.name, status: 'connected', tools: mcpData.statuses[s.id]?.toolCount }));
+    .filter((s: any) => mcpData.statuses[s.id]?.status === 'connected')
+    .map((s: any) => ({ id: s.id, name: s.name, status: 'connected', tools: mcpData.statuses[s.id]?.toolCount }));
 
   const handleSend = () => {
     if (!input.trim() || !workspace || !activeProfile?.hasKey) return;
@@ -310,24 +371,20 @@ export default function App() {
     setIsTyping(true);
     setStatusText(null);
 
-    window.electron?.sendPrompt(input, workspace, config.activeProfileId, history);
+    window.electron?.sendPrompt(input, workspace, config.activeProfileId, history, {
+      // Real usage only — an estimate as the compaction trigger could compact
+      // too early (or too late) when the provider never reports usage.
+      lastInputTokens: contextInfo && !contextInfo.estimated ? contextInfo.lastInputTokens : undefined,
+    });
   };
 
   /* ---- Skills handlers ---- */
-  const handleToggleSkill = (skill: SkillEntry) => {
+  const handleToggleSkill = (skill: any) => {
     setActiveSkills((prev) => {
       const exists = prev.find((s) => s.id === skill.id);
       const next = exists
         ? prev.filter((s) => s.id !== skill.id)
         : [...prev, { id: skill.id, name: skill.name, description: skill.description }];
-      window.electron?.setSkillIds(next.map((s) => s.id));
-      return next;
-    });
-  };
-
-  const handleRemoveSkill = (id: string) => {
-    setActiveSkills((prev) => {
-      const next = prev.filter((s) => s.id !== id);
       window.electron?.setSkillIds(next.map((s) => s.id));
       return next;
     });
@@ -343,6 +400,10 @@ export default function App() {
     setHistory(s.history ?? undefined);
     setCurrentSessionId(s.id);
     setShowSessionsPanel(false);
+    // Restore persisted usage; absent → null/zeros, and the display layer
+    // falls back to a live chars/4 estimate of the restored history.
+    setSessionUsageBoth(s.usage?.session ?? EMPTY_SESSION_USAGE);
+    setContextInfoBoth(s.usage?.context ?? null);
   };
 
   const handleDeleteSession = async (id: string) => {
@@ -355,15 +416,119 @@ export default function App() {
   };
 
   /* ---- MCP handlers ---- */
-  const handleDisconnectMcp = (id: string) => {
-    window.electron?.disconnectMcp(id).then(setMcpData);
-  };
-
   const handleAddMcpPreset = (preset: any) => {
     const args = preset.args.map((a: string) => (a === '{workspace}' ? (workspace ?? '~') : a));
     window.electron?.upsertMcpServer({ name: preset.name, transport: 'stdio', command: preset.command, args })
       .then((d: any) => d && setMcpData(d));
   };
+
+  /* ---- Slash commands ---- */
+  const appendLocalNote = (content: string) => {
+    setMessages((prev) => [...prev, { id: Date.now().toString(), role: 'assistant', content }]);
+  };
+
+  const compactNow = async () => {
+    if (isTyping) return;
+    if (!activeProfile?.hasKey) { appendLocalNote('No active model profile with an API key — configure one in Settings.'); return; }
+    if (!history || history.length <= 2) { appendLocalNote('Nothing to compact yet.'); return; }
+    const before = history.length;
+    setIsTyping(true);
+    try {
+      const res = await window.electron?.compactNow(config.activeProfileId, history);
+      if (res?.ok) {
+        setHistory(res.history);
+        // The pre-compaction reported tokens are stale now; drop to an
+        // estimate so the banner clears and the stale count is never sent
+        // back as a compaction trigger.
+        const est = estimateHistoryTokens(res.history);
+        setContextInfoBoth({
+          lastInputTokens: est,
+          lastOutputTokens: 0,
+          contextWindow: activeLimits.contextWindow,
+          maxOutputTokens: activeLimits.maxOutputTokens,
+          pct: Math.min(1, est / activeLimits.contextWindow),
+          estimated: true,
+        });
+        appendLocalNote(`History compacted: ${before} → ${res.history.length} messages.`);
+      } else {
+        appendLocalNote(`Compaction failed${res?.error ? `: ${res.error}` : '.'}`);
+      }
+    } finally {
+      setIsTyping(false);
+    }
+  };
+
+  const fmtTok = (n: number) => (n >= 1000 ? `${Math.round(n / 100) / 10}k` : `${n}`);
+  const contextReport = () => {
+    if (!displayContext) return 'Context: empty — no conversation yet.';
+    const used = displayContext.lastInputTokens + displayContext.lastOutputTokens;
+    const approx = displayContext.estimated ? '~' : '';
+    return `Context: ${approx}${fmtTok(used)} / ${fmtTok(displayContext.contextWindow)} tokens (${Math.round(displayContext.pct * 100)}% ${displayContext.estimated ? 'estimated' : 'reported'}).`;
+  };
+  const usageReport = () => {
+    const overridden = (field: string) => (activeProfile?.[field] ? ' (override)' : '');
+    const lines = [
+      `Model: ${activeProfile?.model ?? '(none)'} — context window ${activeLimits.contextWindow.toLocaleString()}${overridden('contextWindow')}, max output ${activeLimits.maxOutputTokens.toLocaleString()}${overridden('maxOutputTokens')}.`,
+      contextReport(),
+    ];
+    if (displayContext && !displayContext.estimated) {
+      lines.push(`Last turn: ${fmtTok(displayContext.lastInputTokens)} in · ${fmtTok(displayContext.lastOutputTokens)} out.`);
+    }
+    lines.push(`Session: ${sessionUsage.turns} turn${sessionUsage.turns === 1 ? '' : 's'} · ${fmtTok(sessionUsage.inputTokens)} in · ${fmtTok(sessionUsage.outputTokens)} out · ${fmtTok(sessionUsage.cachedInputTokens)} cached.`);
+    const p = activeLimits.pricing;
+    if (p && (sessionUsage.inputTokens || sessionUsage.outputTokens)) {
+      const cost = ((sessionUsage.inputTokens - sessionUsage.cachedInputTokens) * p.inPerMTok
+        + sessionUsage.cachedInputTokens * (p.cachedInPerMTok ?? p.inPerMTok)
+        + sessionUsage.outputTokens * p.outPerMTok) / 1e6;
+      lines.push(`Est. session cost: $${cost.toFixed(4)}.`);
+    }
+    return lines.join('\n');
+  };
+
+  const baseCommands = [
+    { name: 'clear', description: 'Start a new chat', run: () => startNewChat() },
+    { name: 'compact', description: 'Compact conversation history now', run: () => compactNow() },
+    { name: 'usage', description: 'Show token usage, limits, and cost', run: () => appendLocalNote(usageReport()) },
+    { name: 'context', description: 'Show context window usage', run: () => appendLocalNote(contextReport()) },
+    {
+      name: 'model', description: 'Switch model profile: /model <name>', run: (arg?: string) => {
+        const profiles = config?.profiles ?? [];
+        if (arg) {
+          const match = profiles.find((p: any) => p.name.toLowerCase().includes(arg.toLowerCase()));
+          if (match) {
+            window.electron?.setActiveProfile(match.id).then(setConfig);
+            appendLocalNote(`Model switched to ${match.name}.`);
+            return;
+          }
+        }
+        appendLocalNote(`Profiles: ${profiles.map((p: any) => p.name).join(', ') || '(none configured)'}. Usage: /model <name>.`);
+      }
+    },
+    { name: 'skills', description: 'Open the skills panel', run: () => setShowSkillsPanel(true) },
+    {
+      name: 'sessions', description: 'Open saved sessions', run: async () => {
+        const list = await window.electron?.listSessions();
+        setSessionList(list ?? []);
+        setShowSessionsPanel(true);
+      }
+    },
+    {
+      name: 'mcp', description: 'Open MCP servers', run: async () => {
+        const d = await window.electron?.mcpList?.();
+        if (d) setMcpData(d);
+        setShowMcpPanel(true);
+      }
+    },
+    { name: 'settings', description: 'Open settings', run: () => setShowSettings(true) },
+  ];
+  const slashCommands = [
+    ...baseCommands,
+    {
+      name: 'help', description: 'List available commands', run: () =>
+        appendLocalNote(baseCommands.concat([{ name: 'help', description: 'List available commands' }])
+          .map((c: any) => `/${c.name} — ${c.description}`).join('\n'))
+    },
+  ];
 
   const respondPermission = (allow: boolean, alwaysAllow: boolean) => {
     const req = permissionQueue[0];
@@ -396,88 +561,102 @@ export default function App() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '20px', paddingTop: '40px', position: 'relative', boxSizing: 'border-box' }}>
-      
+
       {/* Settings Modal */}
       {showSettings && (
         <div className="modal-overlay">
           <div className="glass-panel modal-content">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <h3 style={{ margin: 0 }}>Settings</h3>
-                <X size={18} style={{ cursor: 'pointer' }} onClick={() => setShowSettings(false)} />
+              <h3 style={{ margin: 0 }}>Settings</h3>
+              <X size={18} style={{ cursor: 'pointer' }} onClick={() => setShowSettings(false)} />
             </div>
-            
+
             {!profileForm ? (
-                <>
-                    {config?.profiles.length === 0 && (
-                        <p style={{ color: 'var(--text-secondary)' }}>No model profiles yet. Add one to start chatting.</p>
-                    )}
-                    {config?.profiles.map((p: any) => (
-                        <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 0', borderBottom: '1px solid var(--border-color)' }}>
-                            <input type="radio" name="active-profile" checked={p.id === config.activeProfileId}
-                                onChange={() => window.electron?.setActiveProfile(p.id).then(setConfig)} />
-                            <div style={{ flexGrow: 1 }}>
-                                <div style={{ fontWeight: 600 }}>{p.name}{!p.hasKey && <span style={{ color: 'salmon', fontSize: '11px', marginLeft: '6px' }}>no key</span>}</div>
-                                <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{p.provider} · {p.model}</div>
-                            </div>
-                            <button className="glass-panel" style={{ padding: '4px 10px', cursor: 'pointer', color: 'var(--text-primary)' }}
-                                onClick={() => setProfileForm({ id: p.id, name: p.name, provider: p.provider, model: p.model, baseUrl: p.baseUrl, apiKey: '', hasKey: p.hasKey })}>
-                                Edit
-                            </button>
-                            <button className="glass-panel" style={{ padding: '4px 10px', cursor: 'pointer', color: 'salmon' }}
-                                onClick={() => window.electron?.deleteProfile(p.id).then(setConfig)}>
-                                Delete
-                            </button>
-                        </div>
-                    ))}
-                    <button onClick={() => setProfileForm({ name: '', provider: 'OpenAI', model: 'gpt-4o', baseUrl: '', apiKey: '' })}
-                        style={{ background: 'var(--accent-color)', color: '#000', border: 'none', borderRadius: '8px', padding: '10px', cursor: 'pointer', fontWeight: 600, marginTop: '10px' }}>
-                        Add Profile
+              <>
+                {config?.profiles.length === 0 && (
+                  <p style={{ color: 'var(--text-secondary)' }}>No model profiles yet. Add one to start chatting.</p>
+                )}
+                {config?.profiles.map((p: any) => (
+                  <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 0', borderBottom: '1px solid var(--border-color)' }}>
+                    <input type="radio" name="active-profile" checked={p.id === config.activeProfileId}
+                      onChange={() => window.electron?.setActiveProfile(p.id).then(setConfig)} />
+                    <div style={{ flexGrow: 1 }}>
+                      <div style={{ fontWeight: 600 }}>{p.name}{!p.hasKey && <span style={{ color: 'salmon', fontSize: '11px', marginLeft: '6px' }}>no key</span>}</div>
+                      <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{p.provider} · {p.model}</div>
+                    </div>
+                    <button className="glass-panel" style={{ padding: '4px 10px', cursor: 'pointer', color: 'var(--text-primary)' }}
+                      onClick={() => setProfileForm({ id: p.id, name: p.name, provider: p.provider, model: p.model, baseUrl: p.baseUrl, apiKey: '', hasKey: p.hasKey, contextWindow: p.contextWindow ?? '', maxOutputTokens: p.maxOutputTokens ?? '' })}>
+                      Edit
                     </button>
-                </>
+                    <button className="glass-panel" style={{ padding: '4px 10px', cursor: 'pointer', color: 'salmon' }}
+                      onClick={() => window.electron?.deleteProfile(p.id).then(setConfig)}>
+                      Delete
+                    </button>
+                  </div>
+                ))}
+                <button onClick={() => setProfileForm({ name: '', provider: 'OpenAI', model: 'gpt-4o', baseUrl: '', apiKey: '', contextWindow: '', maxOutputTokens: '' })}
+                  style={{ background: 'var(--accent-color)', color: '#000', border: 'none', borderRadius: '8px', padding: '10px', cursor: 'pointer', fontWeight: 600, marginTop: '10px' }}>
+                  Add Model
+                </button>
+              </>
             ) : (
-                <>
-                    <div>
-                        <label>Profile Name</label>
-                        <input type="text" value={profileForm.name} onChange={(e) => setProfileForm({ ...profileForm, name: e.target.value })} placeholder="e.g. GPT-4o (work)" />
-                    </div>
-                    <div>
-                        <label>Provider</label>
-                        <select value={profileForm.provider}
-                            onChange={(e) => {
-                                const opt = providerOptions.find((p) => p.label === e.target.value);
-                                setProfileForm(profileForm.id
-                                    ? { ...profileForm, provider: e.target.value } // editing: never clobber saved fields
-                                    : { ...profileForm, provider: e.target.value, baseUrl: opt?.defaultBase || '', model: opt?.defaultModel || '' });
-                            }}>
-                            {providerOptions.map((p) => <option key={p.label} value={p.label}>{p.label}</option>)}
-                        </select>
-                    </div>
-                    <div>
-                        <label>Model Name</label>
-                        <input type="text" value={profileForm.model} onChange={(e) => setProfileForm({ ...profileForm, model: e.target.value })} placeholder="e.g. gpt-4o" />
-                    </div>
-                    <div>
-                        <label>Base URL (Optional)</label>
-                        <input type="text" value={profileForm.baseUrl} onChange={(e) => setProfileForm({ ...profileForm, baseUrl: e.target.value })} placeholder="Override endpoint URL..." />
-                    </div>
-                    <div>
-                        <label>API Key</label>
-                        <input type="password" value={profileForm.apiKey} onChange={(e) => setProfileForm({ ...profileForm, apiKey: e.target.value })}
-                            placeholder={profileForm.hasKey ? '•••••••• (leave blank to keep)' : 'Enter your API Key...'} />
-                    </div>
-                    <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
-                        <button className="glass-panel" style={{ padding: '10px', cursor: 'pointer', color: 'var(--text-primary)', flexGrow: 1 }} onClick={() => setProfileForm(null)}>Cancel</button>
-                        <button
-                            style={{ background: 'var(--accent-color)', color: '#000', border: 'none', borderRadius: '8px', padding: '10px', cursor: 'pointer', fontWeight: 600, flexGrow: 1 }}
-                            disabled={!profileForm.name.trim() || !profileForm.model.trim()}
-                            onClick={() => {
-                                const { apiKey, hasKey, ...profile } = profileForm;
-                                window.electron?.upsertProfile(profile, apiKey || undefined).then((c) => { setConfig(c); setProfileForm(null); });
-                            }}>
-                            Save Profile
-                        </button>
-                    </div>
-                </>
+              <>
+                <div>
+                  <label>Profile Name</label>
+                  <input type="text" value={profileForm.name} onChange={(e) => setProfileForm({ ...profileForm, name: e.target.value })} placeholder="e.g. GPT-4o (work)" />
+                </div>
+                <div>
+                  <label>Provider</label>
+                  <select value={profileForm.provider}
+                    onChange={(e) => {
+                      const opt = providerOptions.find((p) => p.label === e.target.value);
+                      setProfileForm(profileForm.id
+                        ? { ...profileForm, provider: e.target.value } // editing: never clobber saved fields
+                        : { ...profileForm, provider: e.target.value, baseUrl: opt?.defaultBase || '', model: opt?.defaultModel || '' });
+                    }}>
+                    {providerOptions.map((p) => <option key={p.label} value={p.label}>{p.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label>Model Name</label>
+                  <input type="text" value={profileForm.model} onChange={(e) => setProfileForm({ ...profileForm, model: e.target.value })} placeholder="e.g. gpt-4o" />
+                </div>
+                <div>
+                  <label>Base URL (Optional)</label>
+                  <input type="text" value={profileForm.baseUrl} onChange={(e) => setProfileForm({ ...profileForm, baseUrl: e.target.value })} placeholder="Override endpoint URL..." />
+                </div>
+                <div>
+                  <label>API Key</label>
+                  <input type="password" value={profileForm.apiKey} onChange={(e) => setProfileForm({ ...profileForm, apiKey: e.target.value })}
+                    placeholder={profileForm.hasKey ? '•••••••• (leave blank to keep)' : 'Enter your API Key...'} />
+                </div>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <div style={{ flexGrow: 1 }}>
+                    <label>Context Window (Optional)</label>
+                    <input type="number" min="1" value={profileForm.contextWindow ?? ''}
+                      onChange={(e) => setProfileForm({ ...profileForm, contextWindow: e.target.value })}
+                      placeholder={`Default: ${resolveLimits(profileForm.model).contextWindow.toLocaleString()}`} />
+                  </div>
+                  <div style={{ flexGrow: 1 }}>
+                    <label>Max Output Tokens (Optional)</label>
+                    <input type="number" min="1" value={profileForm.maxOutputTokens ?? ''}
+                      onChange={(e) => setProfileForm({ ...profileForm, maxOutputTokens: e.target.value })}
+                      placeholder={`Default: ${resolveLimits(profileForm.model).maxOutputTokens.toLocaleString()}`} />
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+                  <button className="glass-panel" style={{ padding: '10px', cursor: 'pointer', color: 'var(--text-primary)', flexGrow: 1 }} onClick={() => setProfileForm(null)}>Cancel</button>
+                  <button
+                    style={{ background: 'var(--accent-color)', color: '#000', border: 'none', borderRadius: '8px', padding: '10px', cursor: 'pointer', fontWeight: 600, flexGrow: 1 }}
+                    disabled={!profileForm.name.trim() || !profileForm.model.trim()}
+                    onClick={() => {
+                      const { apiKey, hasKey, ...profile } = profileForm;
+                      window.electron?.upsertProfile(profile, apiKey || undefined).then((c) => { setConfig(c); setProfileForm(null); });
+                    }}>
+                    Save Model
+                  </button>
+                </div>
+              </>
             )}
           </div>
         </div>
@@ -486,81 +665,81 @@ export default function App() {
       {/* MCP Server Form Modal */}
       {mcpForm && (
         <div className="modal-overlay modal-overlay-elevated">
-            <div className="glass-panel modal-content">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <h3 style={{ margin: 0 }}>{mcpForm.id ? 'Edit MCP Server' : 'Add MCP Server'}</h3>
-                    <X size={18} style={{ cursor: 'pointer' }} onClick={() => setMcpForm(null)} />
-                </div>
-                <div>
-                    <label>Name</label>
-                    <input type="text" value={mcpForm.name} onChange={(e) => setMcpForm({ ...mcpForm, name: e.target.value })} placeholder="e.g. GitHub" />
-                </div>
-                <div>
-                    <label>Transport</label>
-                    <select value={mcpForm.transport} onChange={(e) => setMcpForm({ ...mcpForm, transport: e.target.value })}>
-                        <option value="stdio">stdio (local command)</option>
-                        <option value="http">http (remote URL)</option>
-                    </select>
-                </div>
-                {mcpForm.transport === 'stdio' ? (
-                    <>
-                        <div>
-                            <label>Command</label>
-                            <input type="text" value={mcpForm.command} onChange={(e) => setMcpForm({ ...mcpForm, command: e.target.value })} placeholder="npx" />
-                        </div>
-                        <div>
-                            <label>Arguments (space-separated)</label>
-                            <input type="text" value={mcpForm.argsText} onChange={(e) => setMcpForm({ ...mcpForm, argsText: e.target.value })} placeholder="-y @modelcontextprotocol/server-github" />
-                        </div>
-                    </>
-                ) : (
-                    <div>
-                        <label>URL</label>
-                        <input type="text" value={mcpForm.url} onChange={(e) => setMcpForm({ ...mcpForm, url: e.target.value })} placeholder="https://example.com/mcp" />
-                    </div>
-                )}
-                <div>
-                    <label>{mcpForm.transport === 'stdio' ? 'Environment (KEY=value per line)' : 'Headers (Name: value per line)'}</label>
-                    <textarea
-                        className="mcp-secrets-input"
-                        rows={3}
-                        value={mcpForm.secretsText}
-                        onChange={(e) => setMcpForm({ ...mcpForm, secretsText: e.target.value })}
-                        placeholder={mcpForm.hasSecrets ? '•••••••• (leave blank to keep)' : mcpForm.transport === 'stdio' ? 'GITHUB_TOKEN=ghp_…' : 'Authorization: Bearer …'}
-                    />
-                </div>
-                <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
-                    <button className="glass-panel" style={{ padding: '10px', cursor: 'pointer', color: 'var(--text-primary)', flexGrow: 1 }} onClick={() => setMcpForm(null)}>Cancel</button>
-                    <button
-                        style={{ background: 'var(--accent-color)', color: '#000', border: 'none', borderRadius: '8px', padding: '10px', cursor: 'pointer', fontWeight: 600, flexGrow: 1 }}
-                        disabled={!mcpForm.name.trim() || (mcpForm.transport === 'stdio' ? !mcpForm.command.trim() : !mcpForm.url.trim())}
-                        onClick={() => {
-                            const def = {
-                                id: mcpForm.id, name: mcpForm.name.trim(), transport: mcpForm.transport,
-                                command: mcpForm.transport === 'stdio' ? mcpForm.command.trim() : undefined,
-                                args: mcpForm.transport === 'stdio' ? mcpForm.argsText.trim().split(/\s+/).filter(Boolean) : undefined,
-                                url: mcpForm.transport === 'http' ? mcpForm.url.trim() : undefined,
-                            };
-                            let rawSecrets;
-                            const lines = mcpForm.secretsText.split('\n').map((l: string) => l.trim()).filter(Boolean);
-                            if (lines.length > 0) {
-                                if (mcpForm.transport === 'stdio') {
-                                    const env = {};
-                                    for (const l of lines) { const i = l.indexOf('='); if (i > 0) env[l.slice(0, i)] = l.slice(i + 1); }
-                                    rawSecrets = { env };
-                                } else {
-                                    const headers = {};
-                                    for (const l of lines) { const i = l.indexOf(':'); if (i > 0) headers[l.slice(0, i).trim()] = l.slice(i + 1).trim(); }
-                                    rawSecrets = { headers };
-                                }
-                            }
-                            window.electron?.upsertMcpServer(def, rawSecrets).then((d: any) => { setMcpData(d); setMcpForm(null); });
-                        }}
-                    >
-                        Save Server
-                    </button>
-                </div>
+          <div className="glass-panel modal-content">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h3 style={{ margin: 0 }}>{mcpForm.id ? 'Edit MCP Server' : 'Add MCP Server'}</h3>
+              <X size={18} style={{ cursor: 'pointer' }} onClick={() => setMcpForm(null)} />
             </div>
+            <div>
+              <label>Name</label>
+              <input type="text" value={mcpForm.name} onChange={(e) => setMcpForm({ ...mcpForm, name: e.target.value })} placeholder="e.g. GitHub" />
+            </div>
+            <div>
+              <label>Transport</label>
+              <select value={mcpForm.transport} onChange={(e) => setMcpForm({ ...mcpForm, transport: e.target.value })}>
+                <option value="stdio">stdio (local command)</option>
+                <option value="http">http (remote URL)</option>
+              </select>
+            </div>
+            {mcpForm.transport === 'stdio' ? (
+              <>
+                <div>
+                  <label>Command</label>
+                  <input type="text" value={mcpForm.command} onChange={(e) => setMcpForm({ ...mcpForm, command: e.target.value })} placeholder="npx" />
+                </div>
+                <div>
+                  <label>Arguments (space-separated)</label>
+                  <input type="text" value={mcpForm.argsText} onChange={(e) => setMcpForm({ ...mcpForm, argsText: e.target.value })} placeholder="-y @modelcontextprotocol/server-github" />
+                </div>
+              </>
+            ) : (
+              <div>
+                <label>URL</label>
+                <input type="text" value={mcpForm.url} onChange={(e) => setMcpForm({ ...mcpForm, url: e.target.value })} placeholder="https://example.com/mcp" />
+              </div>
+            )}
+            <div>
+              <label>{mcpForm.transport === 'stdio' ? 'Environment (KEY=value per line)' : 'Headers (Name: value per line)'}</label>
+              <textarea
+                className="mcp-secrets-input"
+                rows={3}
+                value={mcpForm.secretsText}
+                onChange={(e) => setMcpForm({ ...mcpForm, secretsText: e.target.value })}
+                placeholder={mcpForm.hasSecrets ? '•••••••• (leave blank to keep)' : mcpForm.transport === 'stdio' ? 'GITHUB_TOKEN=ghp_…' : 'Authorization: Bearer …'}
+              />
+            </div>
+            <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+              <button className="glass-panel" style={{ padding: '10px', cursor: 'pointer', color: 'var(--text-primary)', flexGrow: 1 }} onClick={() => setMcpForm(null)}>Cancel</button>
+              <button
+                style={{ background: 'var(--accent-color)', color: '#000', border: 'none', borderRadius: '8px', padding: '10px', cursor: 'pointer', fontWeight: 600, flexGrow: 1 }}
+                disabled={!mcpForm.name.trim() || (mcpForm.transport === 'stdio' ? !mcpForm.command.trim() : !mcpForm.url.trim())}
+                onClick={() => {
+                  const def = {
+                    id: mcpForm.id, name: mcpForm.name.trim(), transport: mcpForm.transport,
+                    command: mcpForm.transport === 'stdio' ? mcpForm.command.trim() : undefined,
+                    args: mcpForm.transport === 'stdio' ? mcpForm.argsText.trim().split(/\s+/).filter(Boolean) : undefined,
+                    url: mcpForm.transport === 'http' ? mcpForm.url.trim() : undefined,
+                  };
+                  let rawSecrets;
+                  const lines = mcpForm.secretsText.split('\n').map((l: string) => l.trim()).filter(Boolean);
+                  if (lines.length > 0) {
+                    if (mcpForm.transport === 'stdio') {
+                      const env = {};
+                      for (const l of lines) { const i = l.indexOf('='); if (i > 0) env[l.slice(0, i)] = l.slice(i + 1); }
+                      rawSecrets = { env };
+                    } else {
+                      const headers = {};
+                      for (const l of lines) { const i = l.indexOf(':'); if (i > 0) headers[l.slice(0, i).trim()] = l.slice(i + 1).trim(); }
+                      rawSecrets = { headers };
+                    }
+                  }
+                  window.electron?.upsertMcpServer(def, rawSecrets).then((d: any) => { setMcpData(d); setMcpForm(null); });
+                }}
+              >
+                Save Server
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -570,7 +749,7 @@ export default function App() {
           <div className="glass-panel modal-content">
             <h3 style={{ margin: 0 }}>Permission required</h3>
             <p style={{ margin: '8px 0', color: 'var(--text-secondary)' }}>
-                {permissionQueue[0].agent && permissionQueue[0].agent !== 'main' ? `Subagent ${permissionQueue[0].agent}` : 'The agent'} wants to run <strong>{permissionQueue[0].name}</strong>:
+              {permissionQueue[0].agent && permissionQueue[0].agent !== 'main' ? `Subagent ${permissionQueue[0].agent}` : 'The agent'} wants to run <strong>{permissionQueue[0].name}</strong>:
             </p>
             <pre style={{
               background: 'rgba(0,0,0,0.4)',
@@ -653,98 +832,107 @@ export default function App() {
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <div style={{ background: 'var(--accent-color)', borderRadius: '50%', padding: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <Bot size={20} color="#fff" />
-            </div>
-            <h1 style={{ margin: 0, fontSize: '18px', fontWeight: 600 }}>Moon Agent</h1>
+          <img src="./moon-logo.png" width={28} height={28} alt="Moon Agent" />
+          <h1 style={{ margin: 0, fontSize: '18px', fontWeight: 600 }}>Moon Agent</h1>
         </div>
-        
+
         <div style={{ display: 'flex', gap: '10px' }}>
-            <button 
+          <button
             onClick={selectWorkspace}
             className="glass-panel"
             style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '14px' }}
-            >
+          >
             <FolderOpen size={16} />
             {workspace ? workspace.split('/').pop() : 'Select Workspace'}
-            </button>
+          </button>
 
-            <button
-              onClick={async () => {
-                const list = await window.electron?.listSessions();
-                setSessionList(list ?? []);
-                setShowSessionsPanel(true);
-              }}
-              className="glass-panel"
-              style={{ display: 'flex', alignItems: 'center', padding: '8px 12px', color: 'var(--text-primary)', cursor: 'pointer' }}
-              title="Sessions"
-            >
-              <History size={16} />
-            </button>
+          <button
+            onClick={async () => {
+              const list = await window.electron?.listSessions();
+              setSessionList(list ?? []);
+              setShowSessionsPanel(true);
+            }}
+            className="glass-panel"
+            style={{ display: 'flex', alignItems: 'center', padding: '8px 12px', color: 'var(--text-primary)', cursor: 'pointer' }}
+            title="Sessions"
+          >
+            <History size={16} />
+          </button>
 
-            <button
+          <button
             onClick={startNewChat}
             className="glass-panel"
             style={{ display: 'flex', alignItems: 'center', padding: '8px 12px', color: 'var(--text-primary)', cursor: 'pointer' }}
             title="New Chat"
-            >
+          >
             <Plus size={16} />
-            </button>
+          </button>
 
-            <button
+          <button
             onClick={() => setShowSettings(true)}
             className="glass-panel"
             style={{ display: 'flex', alignItems: 'center', padding: '8px 12px', color: 'var(--text-primary)', cursor: 'pointer' }}
-            >
+          >
             <Settings size={16} />
-            </button>
+          </button>
         </div>
       </div>
 
       {/* Chat Area */}
       <div className="chat-container glass-panel" style={{ flexGrow: 1, overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
         {messages.length === 0 ? (
-            <div style={{ margin: 'auto', textAlign: 'center', color: 'var(--text-secondary)' }}>
-                <h2>How can I help you code today?</h2>
-                <p>Select a workspace and start chatting.</p>
-            </div>
+          <div style={{ margin: 'auto', textAlign: 'center', color: 'var(--text-secondary)' }}>
+            <h2>How can I help you code today?</h2>
+            <p>Select a workspace and start chatting.</p>
+          </div>
         ) : (
-            messages.map((msg, i) => {
-                return (
-                <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
-                    {msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0 && (
-                        <div className="activity-block">
-                            {msg.toolCalls.map((tool: any, j: number) => <ToolActivity key={j} tool={tool} />)}
-                        </div>
-                    )}
-                    {(msg.role === 'user' || msg.content !== '' || (isTyping && i === messages.length - 1)) && (
-                        <div style={{
-                            background: msg.role === 'user' ? 'var(--accent-color)' : 'rgba(255,255,255,0.05)',
-                            color: msg.role === 'user' ? '#000' : 'var(--text-primary)',
-                            padding: '12px 16px',
-                            borderRadius: '12px',
-                            maxWidth: '80%',
-                            lineHeight: '1.5'
-                        }}>
-                            {msg.role === 'assistant' ? (
-                                <AssistantContent content={msg.content} streaming={isTyping && i === messages.length - 1} />
-                            ) : msg.content}
-                        </div>
-                    )}
-                </div>
-                );
-            })
+          messages.map((msg, i) => {
+            return (
+              <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
+                {msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0 && (
+                  <div className="activity-block">
+                    {msg.toolCalls.map((tool: any, j: number) => <ToolActivity key={j} tool={tool} />)}
+                  </div>
+                )}
+                {(msg.role === 'user' || msg.content !== '' || (isTyping && i === messages.length - 1)) && (
+                  <div style={{
+                    background: msg.role === 'user' ? 'var(--accent-color)' : 'rgba(255,255,255,0.05)',
+                    color: msg.role === 'user' ? '#000' : 'var(--text-primary)',
+                    padding: '12px 16px',
+                    borderRadius: '12px',
+                    maxWidth: '80%',
+                    lineHeight: '1.5',
+                    whiteSpace: 'pre-wrap'
+                  }}>
+                    {msg.role === 'assistant' ? (
+                      <AssistantContent content={msg.content} streaming={isTyping && i === messages.length - 1} />
+                    ) : msg.content}
+                  </div>
+                )}
+              </div>
+            );
+          })
         )}
         {isTyping && (
-            <div style={{ color: 'var(--text-secondary)', fontSize: '14px', padding: '10px' }}>
-                {statusText ?? 'Agent is thinking...'}
-            </div>
+          <div style={{ color: 'var(--text-secondary)', fontSize: '14px', padding: '10px' }}>
+            {statusText ?? 'Agent is thinking...'}
+          </div>
         )}
         <div ref={chatEndRef} />
       </div>
 
+      {/* Context-limit warning banner */}
+      {displayContext && displayContext.pct >= 0.8 && !isTyping && (
+        <div className="glass-panel context-warning-banner">
+          <span>
+            Context is {Math.round(displayContext.pct * 100)}%{displayContext.estimated ? ' (estimated)' : ''} full — compaction will run automatically soon.
+          </span>
+          <button className="context-warning-action" onClick={() => compactNow()}>Compact now</button>
+        </div>
+      )}
+
       {/* Rich Input */}
-      <div style={{ marginTop: '20px' }}>
+      <div style={{ marginTop: displayContext && displayContext.pct >= 0.8 && !isTyping ? '8px' : '20px' }}>
         <RichInput
           value={input}
           onChange={setInput}
@@ -753,18 +941,19 @@ export default function App() {
           placeholder={inputPlaceholder}
           skills={activeSkills}
           onAddSkill={() => setShowSkillsPanel(true)}
-          onRemoveSkill={handleRemoveSkill}
           mcpServers={connectedMcpServers}
           onConnectMcp={() => {
             setShowMcpPanel(true);
             window.electron?.mcpList?.().then((d: any) => d && setMcpData(d));
           }}
-          onDisconnectMcp={handleDisconnectMcp}
           profiles={config?.profiles ?? []}
           activeProfileId={config?.activeProfileId ?? null}
           onSelectProfile={(id) => window.electron?.setActiveProfile(id).then(setConfig)}
           busy={isTyping}
           onStop={() => window.electron?.cancelPrompt()}
+          commands={slashCommands}
+          contextInfo={displayContext}
+          capabilities={activeLimits.capabilities}
         />
       </div>
     </div>

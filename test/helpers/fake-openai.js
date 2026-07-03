@@ -1,8 +1,9 @@
 const http = require('http');
 
-function chunk(delta, finish = null) {
+function chunk(delta, finish = null, usage = undefined) {
   return { id: 'c1', object: 'chat.completion.chunk', created: 1, model: 'mock',
-    choices: [{ index: 0, delta, finish_reason: finish }] };
+    choices: [{ index: 0, delta, finish_reason: finish }],
+    ...(usage ? { usage } : {}) };
 }
 
 function toolCallChunk(name, args, id = 'call_1', index = 0) {
@@ -12,6 +13,11 @@ function toolCallChunk(name, args, id = 'call_1', index = 0) {
 
 function textChunks(...texts) {
   return [...texts.map(t => chunk({ content: t })), chunk({}, 'stop')];
+}
+
+// Like textChunks but the final stop chunk carries an OpenAI usage payload.
+function textChunksWithUsage(usage, ...texts) {
+  return [...texts.map(t => chunk({ content: t })), chunk({}, 'stop', usage)];
 }
 
 // route(parsedRequestBody) -> array of chunk objects, or {status, body} for error responses
@@ -50,4 +56,4 @@ function startServer(route) {
 
 const baseUrlOf = (server) => `http://127.0.0.1:${server.address().port}/v1`;
 
-module.exports = { chunk, toolCallChunk, textChunks, startServer, baseUrlOf };
+module.exports = { chunk, toolCallChunk, textChunks, textChunksWithUsage, startServer, baseUrlOf };

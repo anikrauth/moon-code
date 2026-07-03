@@ -46,6 +46,12 @@ export function createConfigStore({ dir, safeStorage }) {
         return profile.enc ? safeStorage.decryptString(buf) : buf.toString('utf-8');
     }
 
+    // Advanced per-profile limit overrides: positive finite number or null (unset).
+    function limitOverride(v) {
+        const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v;
+        return typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : null;
+    }
+
     function encryptSecret(raw) {
         if (safeStorage.isEncryptionAvailable()) {
             return { data: safeStorage.encryptString(raw).toString('base64'), enc: true };
@@ -82,6 +88,8 @@ export function createConfigStore({ dir, safeStorage }) {
                 provider: profile.provider,
                 model: profile.model,
                 baseUrl: profile.baseUrl ?? '',
+                contextWindow: limitOverride(profile.contextWindow),
+                maxOutputTokens: limitOverride(profile.maxOutputTokens),
             };
             let keyFields;
             if (rawApiKey) keyFields = encryptKey(rawApiKey);
@@ -125,7 +133,12 @@ export function createConfigStore({ dir, safeStorage }) {
             try {
                 const apiKey = decryptKey(p);
                 if (!apiKey) return null;
-                return { apiKey, model: p.model, baseUrl: p.baseUrl };
+                return {
+                    apiKey, model: p.model, baseUrl: p.baseUrl,
+                    // keys omitted entirely when unset so resolveLimits falls back cleanly
+                    ...(p.contextWindow ? { contextWindow: p.contextWindow } : {}),
+                    ...(p.maxOutputTokens ? { maxOutputTokens: p.maxOutputTokens } : {}),
+                };
             } catch {
                 return null;
             }

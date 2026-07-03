@@ -25,84 +25,142 @@
 ### Task 1: `configStore` module with unit tests (TDD)
 
 **Files:**
+
 - Create: `src/main/configStore.ts`
 - Test: `test/config-store.test.js`
 
 **Interfaces:**
+
 - Produces: `createConfigStore({ dir, safeStorage })` returning `{ getConfig(), getRedacted(), upsertProfile(profile, rawApiKey?) -> id, deleteProfile(id), setActiveProfile(id), setSkillIds(ids), setMcpIds(ids), resolveSettings(profileId) -> { apiKey, model, baseUrl } | null }`. Task 2 consumes exactly these names.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```js
 // test/config-store.test.js
-const test = require('node:test');
-const assert = require('node:assert');
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
-const { createConfigStore } = require('../dist/main/configStore.js');
+const test = require("node:test");
+const assert = require("node:assert");
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
+const { createConfigStore } = require("../dist/main/configStore.js");
 
 // Reversible fake: "ENC(" + base64 + ")"
 const fakeSafeStorage = {
   isEncryptionAvailable: () => true,
-  encryptString: (s) => Buffer.from(`ENC(${s})`, 'utf-8'),
+  encryptString: (s) => Buffer.from(`ENC(${s})`, "utf-8"),
   decryptString: (buf) => {
-    const m = buf.toString('utf-8').match(/^ENC\((.*)\)$/s);
-    if (!m) throw new Error('bad ciphertext');
+    const m = buf.toString("utf-8").match(/^ENC\((.*)\)$/s);
+    if (!m) throw new Error("bad ciphertext");
     return m[1];
   },
 };
 
-const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'moon-cfg-'));
-const mkStore = (dir) => createConfigStore({ dir, safeStorage: fakeSafeStorage });
+const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), "moon-cfg-"));
+const mkStore = (dir) =>
+  createConfigStore({ dir, safeStorage: fakeSafeStorage });
 
-test('round-trip: two profiles survive reload; switching active mutates nothing else', (t) => {
-  const dir = tmpDir(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+test("round-trip: two profiles survive reload; switching active mutates nothing else", (t) => {
+  const dir = tmpDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const s1 = mkStore(dir);
-  const idA = s1.upsertProfile({ name: 'GPT', provider: 'OpenAI', model: 'gpt-4o', baseUrl: '' }, 'key-a');
-  const idB = s1.upsertProfile({ name: 'GLM', provider: 'Zhipu AI (GLM)', model: 'glm-4', baseUrl: 'https://open.bigmodel.cn/api/paas/v4' }, 'key-b');
+  const idA = s1.upsertProfile(
+    { name: "GPT", provider: "OpenAI", model: "gpt-4o", baseUrl: "" },
+    "key-a",
+  );
+  const idB = s1.upsertProfile(
+    {
+      name: "GLM",
+      provider: "Zhipu AI (GLM)",
+      model: "glm-4",
+      baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+    },
+    "key-b",
+  );
   s1.setActiveProfile(idB);
   const s2 = mkStore(dir); // fresh load from disk
   const cfg = s2.getConfig();
   assert.strictEqual(cfg.profiles.length, 2);
   assert.strictEqual(cfg.activeProfileId, idB);
-  assert.deepStrictEqual(s2.resolveSettings(idA), { apiKey: 'key-a', model: 'gpt-4o', baseUrl: '' });
-  assert.deepStrictEqual(s2.resolveSettings(idB), { apiKey: 'key-b', model: 'glm-4', baseUrl: 'https://open.bigmodel.cn/api/paas/v4' });
+  assert.deepStrictEqual(s2.resolveSettings(idA), {
+    apiKey: "key-a",
+    model: "gpt-4o",
+    baseUrl: "",
+  });
+  assert.deepStrictEqual(s2.resolveSettings(idB), {
+    apiKey: "key-b",
+    model: "glm-4",
+    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+  });
 });
 
-test('first upsert auto-activates; redaction strips key material everywhere', (t) => {
-  const dir = tmpDir(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+test("first upsert auto-activates; redaction strips key material everywhere", (t) => {
+  const dir = tmpDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const s = mkStore(dir);
-  const id = s.upsertProfile({ name: 'GPT', provider: 'OpenAI', model: 'gpt-4o', baseUrl: '' }, 'sekrit');
+  const id = s.upsertProfile(
+    { name: "GPT", provider: "OpenAI", model: "gpt-4o", baseUrl: "" },
+    "sekrit",
+  );
   const red = s.getRedacted();
   assert.strictEqual(red.activeProfileId, id);
   assert.strictEqual(red.profiles[0].hasKey, true);
   const json = JSON.stringify(red);
-  assert.ok(!json.includes('apiKeyEnc') && !json.includes('sekrit') && !json.includes('ENC('));
+  assert.ok(
+    !json.includes("apiKeyEnc") &&
+      !json.includes("sekrit") &&
+      !json.includes("ENC("),
+  );
 });
 
-test('update with empty rawApiKey keeps existing key; other fields update', (t) => {
-  const dir = tmpDir(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+test("update with empty rawApiKey keeps existing key; other fields update", (t) => {
+  const dir = tmpDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const s = mkStore(dir);
-  const id = s.upsertProfile({ name: 'GPT', provider: 'OpenAI', model: 'gpt-4o', baseUrl: '' }, 'orig-key');
-  s.upsertProfile({ id, name: 'GPT renamed', provider: 'OpenAI', model: 'gpt-4o-mini', baseUrl: '' });
-  assert.deepStrictEqual(s.resolveSettings(id), { apiKey: 'orig-key', model: 'gpt-4o-mini', baseUrl: '' });
-  assert.strictEqual(s.getRedacted().profiles[0].name, 'GPT renamed');
+  const id = s.upsertProfile(
+    { name: "GPT", provider: "OpenAI", model: "gpt-4o", baseUrl: "" },
+    "orig-key",
+  );
+  s.upsertProfile({
+    id,
+    name: "GPT renamed",
+    provider: "OpenAI",
+    model: "gpt-4o-mini",
+    baseUrl: "",
+  });
+  assert.deepStrictEqual(s.resolveSettings(id), {
+    apiKey: "orig-key",
+    model: "gpt-4o-mini",
+    baseUrl: "",
+  });
+  assert.strictEqual(s.getRedacted().profiles[0].name, "GPT renamed");
 });
 
-test('new profile without key -> hasKey false, resolveSettings null', (t) => {
-  const dir = tmpDir(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+test("new profile without key -> hasKey false, resolveSettings null", (t) => {
+  const dir = tmpDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const s = mkStore(dir);
-  const id = s.upsertProfile({ name: 'Keyless', provider: 'OpenAI', model: 'gpt-4o', baseUrl: '' });
+  const id = s.upsertProfile({
+    name: "Keyless",
+    provider: "OpenAI",
+    model: "gpt-4o",
+    baseUrl: "",
+  });
   assert.strictEqual(s.getRedacted().profiles[0].hasKey, false);
   assert.strictEqual(s.resolveSettings(id), null);
 });
 
-test('deleting active profile falls back to first remaining, then null', (t) => {
-  const dir = tmpDir(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+test("deleting active profile falls back to first remaining, then null", (t) => {
+  const dir = tmpDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const s = mkStore(dir);
-  const idA = s.upsertProfile({ name: 'A', provider: 'OpenAI', model: 'a', baseUrl: '' }, 'k');
-  const idB = s.upsertProfile({ name: 'B', provider: 'OpenAI', model: 'b', baseUrl: '' }, 'k');
+  const idA = s.upsertProfile(
+    { name: "A", provider: "OpenAI", model: "a", baseUrl: "" },
+    "k",
+  );
+  const idB = s.upsertProfile(
+    { name: "B", provider: "OpenAI", model: "b", baseUrl: "" },
+    "k",
+  );
   s.setActiveProfile(idB);
   s.deleteProfile(idB);
   assert.strictEqual(s.getConfig().activeProfileId, idA);
@@ -110,41 +168,69 @@ test('deleting active profile falls back to first remaining, then null', (t) => 
   assert.strictEqual(s.getConfig().activeProfileId, null);
 });
 
-test('corrupt config file -> empty config, no throw', (t) => {
-  const dir = tmpDir(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  fs.writeFileSync(path.join(dir, 'config.json'), '{not json!!!', 'utf-8');
+test("corrupt config file -> empty config, no throw", (t) => {
+  const dir = tmpDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, "config.json"), "{not json!!!", "utf-8");
   const s = mkStore(dir);
-  assert.deepStrictEqual(s.getConfig(), { version: 1, profiles: [], activeProfileId: null, activeSkillIds: [], connectedMcpIds: [] });
+  assert.deepStrictEqual(s.getConfig(), {
+    version: 1,
+    profiles: [],
+    activeProfileId: null,
+    activeSkillIds: [],
+    connectedMcpIds: [],
+  });
 });
 
-test('setActiveProfile with unknown id is a no-op; resolveSettings unknown id null', (t) => {
-  const dir = tmpDir(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+test("setActiveProfile with unknown id is a no-op; resolveSettings unknown id null", (t) => {
+  const dir = tmpDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const s = mkStore(dir);
-  const id = s.upsertProfile({ name: 'A', provider: 'OpenAI', model: 'a', baseUrl: '' }, 'k');
-  s.setActiveProfile('p-nope');
+  const id = s.upsertProfile(
+    { name: "A", provider: "OpenAI", model: "a", baseUrl: "" },
+    "k",
+  );
+  s.setActiveProfile("p-nope");
   assert.strictEqual(s.getConfig().activeProfileId, id);
-  assert.strictEqual(s.resolveSettings('p-nope'), null);
+  assert.strictEqual(s.resolveSettings("p-nope"), null);
 });
 
-test('skill and mcp id lists persist across reload', (t) => {
-  const dir = tmpDir(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+test("skill and mcp id lists persist across reload", (t) => {
+  const dir = tmpDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const s1 = mkStore(dir);
-  s1.setSkillIds(['web-search', 'git-ops']);
-  s1.setMcpIds(['github']);
+  s1.setSkillIds(["web-search", "git-ops"]);
+  s1.setMcpIds(["github"]);
   const s2 = mkStore(dir);
-  assert.deepStrictEqual(s2.getConfig().activeSkillIds, ['web-search', 'git-ops']);
-  assert.deepStrictEqual(s2.getConfig().connectedMcpIds, ['github']);
+  assert.deepStrictEqual(s2.getConfig().activeSkillIds, [
+    "web-search",
+    "git-ops",
+  ]);
+  assert.deepStrictEqual(s2.getConfig().connectedMcpIds, ["github"]);
 });
 
-test('encryption-unavailable fallback stores base64 with enc:false and still resolves', (t) => {
-  const dir = tmpDir(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+test("encryption-unavailable fallback stores base64 with enc:false and still resolves", (t) => {
+  const dir = tmpDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const noEnc = { ...fakeSafeStorage, isEncryptionAvailable: () => false };
   const s = createConfigStore({ dir, safeStorage: noEnc });
-  const id = s.upsertProfile({ name: 'A', provider: 'OpenAI', model: 'a', baseUrl: '' }, 'plain-key');
-  const raw = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf-8'));
+  const id = s.upsertProfile(
+    { name: "A", provider: "OpenAI", model: "a", baseUrl: "" },
+    "plain-key",
+  );
+  const raw = JSON.parse(
+    fs.readFileSync(path.join(dir, "config.json"), "utf-8"),
+  );
   assert.strictEqual(raw.profiles[0].enc, false);
-  assert.strictEqual(Buffer.from(raw.profiles[0].apiKeyEnc, 'base64').toString('utf-8'), 'plain-key');
-  assert.deepStrictEqual(s.resolveSettings(id), { apiKey: 'plain-key', model: 'a', baseUrl: '' });
+  assert.strictEqual(
+    Buffer.from(raw.profiles[0].apiKeyEnc, "base64").toString("utf-8"),
+    "plain-key",
+  );
+  assert.deepStrictEqual(s.resolveSettings(id), {
+    apiKey: "plain-key",
+    model: "a",
+    baseUrl: "",
+  });
 });
 ```
 
@@ -157,123 +243,139 @@ Expected: config-store tests FAIL with `Cannot find module '../dist/main/configS
 
 ```ts
 // @ts-nocheck
-import * as fs from 'fs';
-import * as path from 'path';
-import { randomUUID } from 'crypto';
+import * as fs from "fs";
+import * as path from "path";
+import { randomUUID } from "crypto";
 
 const emptyConfig = () => ({
-    version: 1,
-    profiles: [],
-    activeProfileId: null,
-    activeSkillIds: [],
-    connectedMcpIds: [],
+  version: 1,
+  profiles: [],
+  activeProfileId: null,
+  activeSkillIds: [],
+  connectedMcpIds: [],
 });
 
 export function createConfigStore({ dir, safeStorage }) {
-    const file = path.join(dir, 'config.json');
-    let config = load();
+  const file = path.join(dir, "config.json");
+  let config = load();
 
-    function load() {
-        try {
-            const parsed = JSON.parse(fs.readFileSync(file, 'utf-8'));
-            if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.profiles)) return emptyConfig();
-            return { ...emptyConfig(), ...parsed };
-        } catch {
-            return emptyConfig();
-        }
+  function load() {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(file, "utf-8"));
+      if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.profiles))
+        return emptyConfig();
+      return { ...emptyConfig(), ...parsed };
+    } catch {
+      return emptyConfig();
     }
+  }
 
-    function persist() {
-        fs.mkdirSync(dir, { recursive: true });
-        const tmp = `${file}.tmp`;
-        fs.writeFileSync(tmp, JSON.stringify(config, null, 2), 'utf-8');
-        fs.renameSync(tmp, file);
+  function persist() {
+    fs.mkdirSync(dir, { recursive: true });
+    const tmp = `${file}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(config, null, 2), "utf-8");
+    fs.renameSync(tmp, file);
+  }
+
+  function encryptKey(raw) {
+    if (safeStorage.isEncryptionAvailable()) {
+      return {
+        apiKeyEnc: safeStorage.encryptString(raw).toString("base64"),
+        enc: true,
+      };
     }
-
-    function encryptKey(raw) {
-        if (safeStorage.isEncryptionAvailable()) {
-            return { apiKeyEnc: safeStorage.encryptString(raw).toString('base64'), enc: true };
-        }
-        console.warn('[moon-agent] OS encryption unavailable; storing API key base64-encoded only.');
-        return { apiKeyEnc: Buffer.from(raw, 'utf-8').toString('base64'), enc: false };
-    }
-
-    function decryptKey(profile) {
-        const buf = Buffer.from(profile.apiKeyEnc, 'base64');
-        return profile.enc ? safeStorage.decryptString(buf) : buf.toString('utf-8');
-    }
-
+    console.warn(
+      "[moon-agent] OS encryption unavailable; storing API key base64-encoded only.",
+    );
     return {
-        getConfig: () => config,
-
-        getRedacted() {
-            return {
-                version: config.version,
-                activeProfileId: config.activeProfileId,
-                activeSkillIds: [...config.activeSkillIds],
-                connectedMcpIds: [...config.connectedMcpIds],
-                profiles: config.profiles.map(({ apiKeyEnc, enc, ...rest }) => ({ ...rest, hasKey: !!apiKeyEnc })),
-            };
-        },
-
-        upsertProfile(profile, rawApiKey) {
-            const existing = profile.id ? config.profiles.find(p => p.id === profile.id) : null;
-            const id = existing ? existing.id : `p-${randomUUID()}`;
-            const base = {
-                id,
-                name: profile.name,
-                provider: profile.provider,
-                model: profile.model,
-                baseUrl: profile.baseUrl ?? '',
-            };
-            let keyFields;
-            if (rawApiKey) keyFields = encryptKey(rawApiKey);
-            else if (existing) keyFields = { apiKeyEnc: existing.apiKeyEnc, enc: existing.enc };
-            else keyFields = { apiKeyEnc: null, enc: false };
-            const next = { ...base, ...keyFields };
-            if (existing) config.profiles = config.profiles.map(p => (p.id === id ? next : p));
-            else config.profiles.push(next);
-            if (!config.activeProfileId) config.activeProfileId = id;
-            persist();
-            return id;
-        },
-
-        deleteProfile(id) {
-            config.profiles = config.profiles.filter(p => p.id !== id);
-            if (config.activeProfileId === id) {
-                config.activeProfileId = config.profiles[0]?.id ?? null;
-            }
-            persist();
-        },
-
-        setActiveProfile(id) {
-            if (!config.profiles.some(p => p.id === id)) return;
-            config.activeProfileId = id;
-            persist();
-        },
-
-        setSkillIds(ids) {
-            config.activeSkillIds = [...ids];
-            persist();
-        },
-
-        setMcpIds(ids) {
-            config.connectedMcpIds = [...ids];
-            persist();
-        },
-
-        resolveSettings(profileId) {
-            const p = config.profiles.find(x => x.id === profileId);
-            if (!p || !p.apiKeyEnc) return null;
-            try {
-                const apiKey = decryptKey(p);
-                if (!apiKey) return null;
-                return { apiKey, model: p.model, baseUrl: p.baseUrl };
-            } catch {
-                return null;
-            }
-        },
+      apiKeyEnc: Buffer.from(raw, "utf-8").toString("base64"),
+      enc: false,
     };
+  }
+
+  function decryptKey(profile) {
+    const buf = Buffer.from(profile.apiKeyEnc, "base64");
+    return profile.enc ? safeStorage.decryptString(buf) : buf.toString("utf-8");
+  }
+
+  return {
+    getConfig: () => config,
+
+    getRedacted() {
+      return {
+        version: config.version,
+        activeProfileId: config.activeProfileId,
+        activeSkillIds: [...config.activeSkillIds],
+        connectedMcpIds: [...config.connectedMcpIds],
+        profiles: config.profiles.map(({ apiKeyEnc, enc, ...rest }) => ({
+          ...rest,
+          hasKey: !!apiKeyEnc,
+        })),
+      };
+    },
+
+    upsertProfile(profile, rawApiKey) {
+      const existing = profile.id
+        ? config.profiles.find((p) => p.id === profile.id)
+        : null;
+      const id = existing ? existing.id : `p-${randomUUID()}`;
+      const base = {
+        id,
+        name: profile.name,
+        provider: profile.provider,
+        model: profile.model,
+        baseUrl: profile.baseUrl ?? "",
+      };
+      let keyFields;
+      if (rawApiKey) keyFields = encryptKey(rawApiKey);
+      else if (existing)
+        keyFields = { apiKeyEnc: existing.apiKeyEnc, enc: existing.enc };
+      else keyFields = { apiKeyEnc: null, enc: false };
+      const next = { ...base, ...keyFields };
+      if (existing)
+        config.profiles = config.profiles.map((p) => (p.id === id ? next : p));
+      else config.profiles.push(next);
+      if (!config.activeProfileId) config.activeProfileId = id;
+      persist();
+      return id;
+    },
+
+    deleteProfile(id) {
+      config.profiles = config.profiles.filter((p) => p.id !== id);
+      if (config.activeProfileId === id) {
+        config.activeProfileId = config.profiles[0]?.id ?? null;
+      }
+      persist();
+    },
+
+    setActiveProfile(id) {
+      if (!config.profiles.some((p) => p.id === id)) return;
+      config.activeProfileId = id;
+      persist();
+    },
+
+    setSkillIds(ids) {
+      config.activeSkillIds = [...ids];
+      persist();
+    },
+
+    setMcpIds(ids) {
+      config.connectedMcpIds = [...ids];
+      persist();
+    },
+
+    resolveSettings(profileId) {
+      const p = config.profiles.find((x) => x.id === profileId);
+      if (!p || !p.apiKeyEnc) return null;
+      try {
+        const apiKey = decryptKey(p);
+        if (!apiKey) return null;
+        return { apiKey, model: p.model, baseUrl: p.baseUrl };
+      } catch {
+        return null;
+      }
+    },
+  };
 }
 ```
 
@@ -294,10 +396,12 @@ git commit -m "feat: main-process config store with safeStorage-encrypted profil
 ### Task 2: IPC wiring — main.ts handlers, preload API, profileId prompts
 
 **Files:**
+
 - Modify: `src/main/main.ts`
 - Modify: `src/preload/preload.ts`
 
 **Interfaces:**
+
 - Consumes: `createConfigStore` from Task 1.
 - Produces: `window.electron.getConfig/upsertProfile/deleteProfile/setActiveProfile/setSkillIds/setMcpIds` (all invoke, all returning the fresh redacted config) and `sendPrompt(prompt, workspace, profileId, history)`. Tasks 3-4 consume these exact names.
 
@@ -306,18 +410,44 @@ git commit -m "feat: main-process config store with safeStorage-encrypted profil
 Inside `app.whenReady().then(() => { ... })`, before the `agent:prompt` handler, add:
 
 ```ts
-const configStore = createConfigStore({ dir: app.getPath('userData'), safeStorage });
+const configStore = createConfigStore({
+  dir: app.getPath("userData"),
+  safeStorage,
+});
 
-const configHandler = (fn) => (_event, ...args) => {
-    try { fn(...args); } catch (e) { console.error('[config]', e); }
+const configHandler =
+  (fn) =>
+  (_event, ...args) => {
+    try {
+      fn(...args);
+    } catch (e) {
+      console.error("[config]", e);
+    }
     return configStore.getRedacted();
-};
-ipcMain.handle('config:get', () => configStore.getRedacted());
-ipcMain.handle('config:upsertProfile', configHandler((profile, rawApiKey) => configStore.upsertProfile(profile, rawApiKey)));
-ipcMain.handle('config:deleteProfile', configHandler((id) => configStore.deleteProfile(id)));
-ipcMain.handle('config:setActiveProfile', configHandler((id) => configStore.setActiveProfile(id)));
-ipcMain.handle('config:setSkillIds', configHandler((ids) => configStore.setSkillIds(ids)));
-ipcMain.handle('config:setMcpIds', configHandler((ids) => configStore.setMcpIds(ids)));
+  };
+ipcMain.handle("config:get", () => configStore.getRedacted());
+ipcMain.handle(
+  "config:upsertProfile",
+  configHandler((profile, rawApiKey) =>
+    configStore.upsertProfile(profile, rawApiKey),
+  ),
+);
+ipcMain.handle(
+  "config:deleteProfile",
+  configHandler((id) => configStore.deleteProfile(id)),
+);
+ipcMain.handle(
+  "config:setActiveProfile",
+  configHandler((id) => configStore.setActiveProfile(id)),
+);
+ipcMain.handle(
+  "config:setSkillIds",
+  configHandler((ids) => configStore.setSkillIds(ids)),
+);
+ipcMain.handle(
+  "config:setMcpIds",
+  configHandler((ids) => configStore.setMcpIds(ids)),
+);
 ```
 
 Imports: add `safeStorage` to the electron import; add `import { createConfigStore } from './configStore';`.
@@ -327,15 +457,29 @@ Imports: add `safeStorage` to the electron import; add `import { createConfigSto
 Replace the `agent:prompt` listener's signature and settings resolution (the `requestPermission` closure and `handlePrompt` call stay identical):
 
 ```ts
-ipcMain.on('agent:prompt', (event, prompt: string, workspace: string, profileId: string, history: any) => {
+ipcMain.on(
+  "agent:prompt",
+  (
+    event,
+    prompt: string,
+    workspace: string,
+    profileId: string,
+    history: any,
+  ) => {
     const settings = configStore.resolveSettings(profileId);
     if (!settings) {
-        event.reply('agent:event', { type: 'error', agent: 'main', content: 'Selected model profile has no API key. Open Settings and configure one.' });
-        event.reply('agent:event', { type: 'done' });
-        return;
+      event.reply("agent:event", {
+        type: "error",
+        agent: "main",
+        content:
+          "Selected model profile has no API key. Open Settings and configure one.",
+      });
+      event.reply("agent:event", { type: "done" });
+      return;
     }
     // ...existing requestPermission definition and handlePrompt(prompt, workspace, settings, history, ..., requestPermission) unchanged...
-});
+  },
+);
 ```
 
 - [ ] **Step 3: preload.ts — expose the API**
@@ -369,11 +513,13 @@ git commit -m "feat: config IPC surface and profileId-based prompts"
 ### Task 3: Renderer — config state, profile manager, migration, skills/MCP persistence
 
 **Files:**
+
 - Modify: `src/renderer/App.tsx`
 - Modify: `src/renderer/SkillsPanel.tsx` (export `SKILL_CATALOG`)
 - Modify: `src/renderer/McpPanel.tsx` (export `MCP_CATALOG`)
 
 **Interfaces:**
+
 - Consumes: `window.electron.*` config API from Task 2; `SKILL_CATALOG`/`MCP_CATALOG` exports added here.
 - Produces: App state `config` (redacted shape), `activeProfile` derivation, `applyConfig(c)` helper. Task 4 consumes `config.profiles`, `config.activeProfileId`, and a `handleSelectProfile(id)` callback passed to RichInput.
 
@@ -390,19 +536,30 @@ const [config, setConfig] = useState<any>(null);
 const [profileForm, setProfileForm] = useState<any>(null); // null = closed; {} = new; {id,...} = edit
 
 const applyConfig = (c: any) => {
-    setConfig(c);
-    setActiveSkills(
-        c.activeSkillIds
-            .map((id: string) => SKILL_CATALOG.find((s) => s.id === id))
-            .filter(Boolean)
-            .map((s: any) => ({ id: s.id, name: s.name, description: s.description }))
-    );
-    const servers = c.connectedMcpIds
-        .map((id: string) => MCP_CATALOG.find((m) => m.id === id))
-        .filter(Boolean)
-        .map((m: any) => ({ id: m.id, name: m.name, status: 'connected', tools: m.tools }));
-    setMcpServers(servers);
-    setMcpStatuses(Object.fromEntries(servers.map((s: any) => [s.id, 'connected'])));
+  setConfig(c);
+  setActiveSkills(
+    c.activeSkillIds
+      .map((id: string) => SKILL_CATALOG.find((s) => s.id === id))
+      .filter(Boolean)
+      .map((s: any) => ({
+        id: s.id,
+        name: s.name,
+        description: s.description,
+      })),
+  );
+  const servers = c.connectedMcpIds
+    .map((id: string) => MCP_CATALOG.find((m) => m.id === id))
+    .filter(Boolean)
+    .map((m: any) => ({
+      id: m.id,
+      name: m.name,
+      status: "connected",
+      tools: m.tools,
+    }));
+  setMcpServers(servers);
+  setMcpStatuses(
+    Object.fromEntries(servers.map((s: any) => [s.id, "connected"])),
+  );
 };
 ```
 
@@ -412,36 +569,42 @@ Imports: add `import { SKILL_CATALOG } from './SkillsPanel';` (merge with existi
 
 ```tsx
 useEffect(() => {
-    (async () => {
-        if (!window.electron?.getConfig) return;
-        let c = await window.electron.getConfig();
-        if (c.profiles.length === 0) {
-            try {
-                const saved = localStorage.getItem('moon-agent-settings');
-                if (saved) {
-                    const old = JSON.parse(saved);
-                    if (old.apiKey) {
-                        c = await window.electron.upsertProfile(
-                            { name: 'Default', provider: old.provider || 'OpenAI', model: old.model || 'gpt-4o', baseUrl: old.baseUrl || '' },
-                            old.apiKey
-                        );
-                    }
-                    localStorage.removeItem('moon-agent-settings');
-                }
-            } catch {
-                // unparseable legacy settings — drop them
-                localStorage.removeItem('moon-agent-settings');
-            }
+  (async () => {
+    if (!window.electron?.getConfig) return;
+    let c = await window.electron.getConfig();
+    if (c.profiles.length === 0) {
+      try {
+        const saved = localStorage.getItem("moon-agent-settings");
+        if (saved) {
+          const old = JSON.parse(saved);
+          if (old.apiKey) {
+            c = await window.electron.upsertProfile(
+              {
+                name: "Default",
+                provider: old.provider || "OpenAI",
+                model: old.model || "gpt-4o",
+                baseUrl: old.baseUrl || "",
+              },
+              old.apiKey,
+            );
+          }
+          localStorage.removeItem("moon-agent-settings");
         }
-        applyConfig(c);
-    })();
+      } catch {
+        // unparseable legacy settings — drop them
+        localStorage.removeItem("moon-agent-settings");
+      }
+    }
+    applyConfig(c);
+  })();
 }, []);
 ```
 
 - [ ] **Step 4: Send path + gating**
 
 ```tsx
-const activeProfile = config?.profiles.find((p: any) => p.id === config.activeProfileId) ?? null;
+const activeProfile =
+  config?.profiles.find((p: any) => p.id === config.activeProfileId) ?? null;
 ```
 
 `handleSend`: guard becomes `if (!input.trim() || !workspace || !activeProfile?.hasKey) return;` and the send call becomes `window.electron?.sendPrompt(input, workspace, config.activeProfileId, history);`.
@@ -454,14 +617,17 @@ Each existing toggle/remove/disconnect handler additionally pushes the new id li
 
 ```tsx
 const handleToggleSkill = (skill: SkillEntry) => {
-    setActiveSkills((prev) => {
-        const exists = prev.find((s) => s.id === skill.id);
-        const next = exists
-            ? prev.filter((s) => s.id !== skill.id)
-            : [...prev, { id: skill.id, name: skill.name, description: skill.description }];
-        window.electron?.setSkillIds(next.map((s) => s.id));
-        return next;
-    });
+  setActiveSkills((prev) => {
+    const exists = prev.find((s) => s.id === skill.id);
+    const next = exists
+      ? prev.filter((s) => s.id !== skill.id)
+      : [
+          ...prev,
+          { id: skill.id, name: skill.name, description: skill.description },
+        ];
+    window.electron?.setSkillIds(next.map((s) => s.id));
+    return next;
+  });
 };
 ```
 
@@ -472,79 +638,222 @@ Same shape for MCP: in `handleToggleMcp`'s disconnect branch and `handleDisconne
 Replace the modal's body (between the header row and nothing — the whole form) with:
 
 ```tsx
-{!profileForm ? (
+{
+  !profileForm ? (
     <>
-        {config?.profiles.length === 0 && (
-            <p style={{ color: 'var(--text-secondary)' }}>No model profiles yet. Add one to start chatting.</p>
-        )}
-        {config?.profiles.map((p: any) => (
-            <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 0', borderBottom: '1px solid var(--border-color)' }}>
-                <input type="radio" name="active-profile" checked={p.id === config.activeProfileId}
-                    onChange={() => window.electron?.setActiveProfile(p.id).then(setConfig)} />
-                <div style={{ flexGrow: 1 }}>
-                    <div style={{ fontWeight: 600 }}>{p.name}{!p.hasKey && <span style={{ color: 'salmon', fontSize: '11px', marginLeft: '6px' }}>no key</span>}</div>
-                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{p.provider} · {p.model}</div>
-                </div>
-                <button className="glass-panel" style={{ padding: '4px 10px', cursor: 'pointer', color: 'var(--text-primary)' }}
-                    onClick={() => setProfileForm({ id: p.id, name: p.name, provider: p.provider, model: p.model, baseUrl: p.baseUrl, apiKey: '', hasKey: p.hasKey })}>
-                    Edit
-                </button>
-                <button className="glass-panel" style={{ padding: '4px 10px', cursor: 'pointer', color: 'salmon' }}
-                    onClick={() => window.electron?.deleteProfile(p.id).then(setConfig)}>
-                    Delete
-                </button>
+      {config?.profiles.length === 0 && (
+        <p style={{ color: "var(--text-secondary)" }}>
+          No model profiles yet. Add one to start chatting.
+        </p>
+      )}
+      {config?.profiles.map((p: any) => (
+        <div
+          key={p.id}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "10px",
+            padding: "8px 0",
+            borderBottom: "1px solid var(--border-color)",
+          }}
+        >
+          <input
+            type="radio"
+            name="active-profile"
+            checked={p.id === config.activeProfileId}
+            onChange={() =>
+              window.electron?.setActiveProfile(p.id).then(setConfig)
+            }
+          />
+          <div style={{ flexGrow: 1 }}>
+            <div style={{ fontWeight: 600 }}>
+              {p.name}
+              {!p.hasKey && (
+                <span
+                  style={{
+                    color: "salmon",
+                    fontSize: "11px",
+                    marginLeft: "6px",
+                  }}
+                >
+                  no key
+                </span>
+              )}
             </div>
-        ))}
-        <button onClick={() => setProfileForm({ name: '', provider: 'OpenAI', model: 'gpt-4o', baseUrl: '', apiKey: '' })}
-            style={{ background: 'var(--accent-color)', color: '#000', border: 'none', borderRadius: '8px', padding: '10px', cursor: 'pointer', fontWeight: 600, marginTop: '10px' }}>
-            Add Profile
-        </button>
+            <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+              {p.provider} · {p.model}
+            </div>
+          </div>
+          <button
+            className="glass-panel"
+            style={{
+              padding: "4px 10px",
+              cursor: "pointer",
+              color: "var(--text-primary)",
+            }}
+            onClick={() =>
+              setProfileForm({
+                id: p.id,
+                name: p.name,
+                provider: p.provider,
+                model: p.model,
+                baseUrl: p.baseUrl,
+                apiKey: "",
+                hasKey: p.hasKey,
+              })
+            }
+          >
+            Edit
+          </button>
+          <button
+            className="glass-panel"
+            style={{ padding: "4px 10px", cursor: "pointer", color: "salmon" }}
+            onClick={() => window.electron?.deleteProfile(p.id).then(setConfig)}
+          >
+            Delete
+          </button>
+        </div>
+      ))}
+      <button
+        onClick={() =>
+          setProfileForm({
+            name: "",
+            provider: "OpenAI",
+            model: "gpt-4o",
+            baseUrl: "",
+            apiKey: "",
+          })
+        }
+        style={{
+          background: "var(--accent-color)",
+          color: "#000",
+          border: "none",
+          borderRadius: "8px",
+          padding: "10px",
+          cursor: "pointer",
+          fontWeight: 600,
+          marginTop: "10px",
+        }}
+      >
+        Add model
+      </button>
     </>
-) : (
+  ) : (
     <>
-        <div>
-            <label>Profile Name</label>
-            <input type="text" value={profileForm.name} onChange={(e) => setProfileForm({ ...profileForm, name: e.target.value })} placeholder="e.g. GPT-4o (work)" />
-        </div>
-        <div>
-            <label>Provider</label>
-            <select value={profileForm.provider}
-                onChange={(e) => {
-                    const opt = providerOptions.find((p) => p.label === e.target.value);
-                    setProfileForm(profileForm.id
-                        ? { ...profileForm, provider: e.target.value } // editing: never clobber saved fields
-                        : { ...profileForm, provider: e.target.value, baseUrl: opt?.defaultBase || '', model: opt?.defaultModel || '' });
-                }}>
-                {providerOptions.map((p) => <option key={p.label} value={p.label}>{p.label}</option>)}
-            </select>
-        </div>
-        <div>
-            <label>Model Name</label>
-            <input type="text" value={profileForm.model} onChange={(e) => setProfileForm({ ...profileForm, model: e.target.value })} placeholder="e.g. gpt-4o" />
-        </div>
-        <div>
-            <label>Base URL (Optional)</label>
-            <input type="text" value={profileForm.baseUrl} onChange={(e) => setProfileForm({ ...profileForm, baseUrl: e.target.value })} placeholder="Override endpoint URL..." />
-        </div>
-        <div>
-            <label>API Key</label>
-            <input type="password" value={profileForm.apiKey} onChange={(e) => setProfileForm({ ...profileForm, apiKey: e.target.value })}
-                placeholder={profileForm.hasKey ? '•••••••• (leave blank to keep)' : 'Enter your API Key...'} />
-        </div>
-        <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
-            <button className="glass-panel" style={{ padding: '10px', cursor: 'pointer', color: 'var(--text-primary)', flexGrow: 1 }} onClick={() => setProfileForm(null)}>Cancel</button>
-            <button
-                style={{ background: 'var(--accent-color)', color: '#000', border: 'none', borderRadius: '8px', padding: '10px', cursor: 'pointer', fontWeight: 600, flexGrow: 1 }}
-                disabled={!profileForm.name.trim() || !profileForm.model.trim()}
-                onClick={() => {
-                    const { apiKey, hasKey, ...profile } = profileForm;
-                    window.electron?.upsertProfile(profile, apiKey || undefined).then((c) => { setConfig(c); setProfileForm(null); });
-                }}>
-                Save Profile
-            </button>
-        </div>
+      <div>
+        <label>Profile Name</label>
+        <input
+          type="text"
+          value={profileForm.name}
+          onChange={(e) =>
+            setProfileForm({ ...profileForm, name: e.target.value })
+          }
+          placeholder="e.g. GPT-4o (work)"
+        />
+      </div>
+      <div>
+        <label>Provider</label>
+        <select
+          value={profileForm.provider}
+          onChange={(e) => {
+            const opt = providerOptions.find((p) => p.label === e.target.value);
+            setProfileForm(
+              profileForm.id
+                ? { ...profileForm, provider: e.target.value } // editing: never clobber saved fields
+                : {
+                    ...profileForm,
+                    provider: e.target.value,
+                    baseUrl: opt?.defaultBase || "",
+                    model: opt?.defaultModel || "",
+                  },
+            );
+          }}
+        >
+          {providerOptions.map((p) => (
+            <option key={p.label} value={p.label}>
+              {p.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div>
+        <label>Model Name</label>
+        <input
+          type="text"
+          value={profileForm.model}
+          onChange={(e) =>
+            setProfileForm({ ...profileForm, model: e.target.value })
+          }
+          placeholder="e.g. gpt-4o"
+        />
+      </div>
+      <div>
+        <label>Base URL (Optional)</label>
+        <input
+          type="text"
+          value={profileForm.baseUrl}
+          onChange={(e) =>
+            setProfileForm({ ...profileForm, baseUrl: e.target.value })
+          }
+          placeholder="Override endpoint URL..."
+        />
+      </div>
+      <div>
+        <label>API Key</label>
+        <input
+          type="password"
+          value={profileForm.apiKey}
+          onChange={(e) =>
+            setProfileForm({ ...profileForm, apiKey: e.target.value })
+          }
+          placeholder={
+            profileForm.hasKey
+              ? "•••••••• (leave blank to keep)"
+              : "Enter your API Key..."
+          }
+        />
+      </div>
+      <div style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
+        <button
+          className="glass-panel"
+          style={{
+            padding: "10px",
+            cursor: "pointer",
+            color: "var(--text-primary)",
+            flexGrow: 1,
+          }}
+          onClick={() => setProfileForm(null)}
+        >
+          Cancel
+        </button>
+        <button
+          style={{
+            background: "var(--accent-color)",
+            color: "#000",
+            border: "none",
+            borderRadius: "8px",
+            padding: "10px",
+            cursor: "pointer",
+            fontWeight: 600,
+            flexGrow: 1,
+          }}
+          disabled={!profileForm.name.trim() || !profileForm.model.trim()}
+          onClick={() => {
+            const { apiKey, hasKey, ...profile } = profileForm;
+            window.electron
+              ?.upsertProfile(profile, apiKey || undefined)
+              .then((c) => {
+                setConfig(c);
+                setProfileForm(null);
+              });
+          }}
+        >
+          Save Model
+        </button>
+      </div>
     </>
-)}
+  );
+}
 ```
 
 `handleSaveSettings` is deleted (no longer referenced). `providerOptions` array stays as-is.
@@ -566,10 +875,12 @@ git commit -m "feat: profile manager UI, config-backed skills/MCP persistence, s
 ### Task 4: Model switcher in the input bar
 
 **Files:**
+
 - Modify: `src/renderer/RichInput.tsx`
 - Modify: `src/renderer/App.tsx` (pass 3 new props)
 
 **Interfaces:**
+
 - Consumes: `config.profiles` (redacted: `{id, name, provider, model, hasKey}`), `config.activeProfileId` from Task 3.
 - Produces: `RichInput` props `profiles: {id,name}[]`, `activeProfileId: string | null`, `onSelectProfile: (id: string) => void`.
 
@@ -578,20 +889,24 @@ git commit -m "feat: profile manager UI, config-backed skills/MCP persistence, s
 Add to `RichInputProps` and the destructured params: `profiles`, `activeProfileId`, `onSelectProfile`. In the toolbar's `ri-toolbar-left` div, FIRST child (before the Skills button):
 
 ```tsx
-{profiles.length > 0 && (
+{
+  profiles.length > 0 && (
     <select
-        className="ri-toolbar-btn"
-        style={{ maxWidth: '160px', cursor: 'pointer' }}
-        value={activeProfileId ?? ''}
-        onChange={(e) => onSelectProfile(e.target.value)}
-        disabled={disabled && profiles.length < 2}
-        title="Switch model"
+      className="ri-toolbar-btn"
+      style={{ maxWidth: "160px", cursor: "pointer" }}
+      value={activeProfileId ?? ""}
+      onChange={(e) => onSelectProfile(e.target.value)}
+      disabled={disabled && profiles.length < 2}
+      title="Switch model"
     >
-        {profiles.map((p) => (
-            <option key={p.id} value={p.id}>{p.name}</option>
-        ))}
+      {profiles.map((p) => (
+        <option key={p.id} value={p.id}>
+          {p.name}
+        </option>
+      ))}
     </select>
-)}
+  );
+}
 ```
 
 Note: the select stays enabled while typing is disabled-for-missing-key so the user can switch TO a working profile; it only disables when there is nothing to switch between.

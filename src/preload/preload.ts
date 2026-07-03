@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('electron', {
   selectFolder: () => ipcRenderer.invoke('dialog:openDirectory'),
-  sendPrompt: (prompt: string, workspace: string, profileId: string, history: any) => ipcRenderer.send('agent:prompt', prompt, workspace, profileId, history),
+  sendPrompt: (prompt: string, workspace: string, profileId: string, history: any, meta?: { lastInputTokens?: number }) => ipcRenderer.send('agent:prompt', prompt, workspace, profileId, history, meta),
   respondPermission: (id: string, allow: boolean, alwaysAllow: boolean) => ipcRenderer.send('agent:permission-response', id, allow, alwaysAllow),
   cancelPrompt: () => ipcRenderer.send('agent:cancel'),
   onAgentEvent: (callback: (event: any) => void) => {
@@ -28,4 +28,5 @@ contextBridge.exposeInMainWorld('electron', {
     ipcRenderer.removeAllListeners('mcp:event');
     ipcRenderer.on('mcp:event', (_event, value) => callback(value));
   },
+  compactNow: (profileId: string, history: any) => ipcRenderer.invoke('agent:compact', profileId, history),
 });
