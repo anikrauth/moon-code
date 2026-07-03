@@ -3,15 +3,9 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Send,
   Square,
-  Plus,
   Puzzle,
-  Plug,
   Paperclip,
-  X,
-  ChevronDown,
   Globe,
-  Wrench,
-  Zap,
 } from 'lucide-react';
 
 /* ------------------------------------------------------------------ */
@@ -40,11 +34,9 @@ interface RichInputProps {
   /** Active skills attached to this prompt */
   skills: SkillItem[];
   onAddSkill: () => void;
-  onRemoveSkill: (id: string) => void;
   /** Connected MCP servers */
   mcpServers: McpServer[];
   onConnectMcp: () => void;
-  onDisconnectMcp: (id: string) => void;
   /** Model profiles */
   profiles: { id: string; name: string }[];
   activeProfileId: string | null;
@@ -66,10 +58,8 @@ export default function RichInput({
   placeholder = 'How can I help you code today?',
   skills,
   onAddSkill,
-  onRemoveSkill,
   mcpServers,
   onConnectMcp,
-  onDisconnectMcp,
   profiles,
   activeProfileId,
   onSelectProfile,
@@ -120,7 +110,6 @@ export default function RichInput({
   };
 
   const connectedCount = mcpServers.filter((s) => s.status === 'connected').length;
-  const hasAttachments = skills.length > 0 || connectedCount > 0;
 
   return (
     <div
@@ -138,44 +127,6 @@ export default function RichInput({
               <span className="ri-cmd-desc">{c.description}</span>
             </div>
           ))}
-        </div>
-      )}
-
-      {/* ---- Attached chips (skills + MCPs) ---- */}
-      {hasAttachments && (
-        <div className="rich-input-chips">
-          {skills.map((skill) => (
-            <span key={skill.id} className="ri-chip ri-chip-skill">
-              <Zap size={12} />
-              <span className="ri-chip-label">{skill.name}</span>
-              <button
-                className="ri-chip-remove"
-                onClick={() => onRemoveSkill(skill.id)}
-                aria-label={`Remove ${skill.name}`}
-              >
-                <X size={10} />
-              </button>
-            </span>
-          ))}
-
-          {mcpServers
-            .filter((s) => s.status === 'connected')
-            .map((srv) => (
-              <span key={srv.id} className="ri-chip ri-chip-mcp">
-                <Plug size={12} />
-                <span className="ri-chip-label">{srv.name}</span>
-                {srv.tools != null && (
-                  <span className="ri-chip-meta">{srv.tools} tools</span>
-                )}
-                <button
-                  className="ri-chip-remove"
-                  onClick={() => onDisconnectMcp(srv.id)}
-                  aria-label={`Disconnect ${srv.name}`}
-                >
-                  <X size={10} />
-                </button>
-              </span>
-            ))}
         </div>
       )}
 
@@ -219,7 +170,12 @@ export default function RichInput({
             title="Add skills"
           >
             <Puzzle size={16} />
-            <span className="ri-toolbar-btn-label">Skills</span>
+            <span className="ri-toolbar-btn-label">
+              Skills
+              {skills.length > 0 && (
+                <span className="ri-badge">{skills.length}</span>
+              )}
+            </span>
           </button>
 
           {/* Connect MCP */}

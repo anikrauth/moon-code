@@ -95,6 +95,8 @@ button, input, select, textarea, .chat-container, .rich-input-container {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  max-height: 80vh;
+  overflow-y: auto;
 }
 
 .modal-content input, .modal-content select {
@@ -145,74 +147,6 @@ button, input, select, textarea, .chat-container, .rich-input-container {
    disabled attributes; the Stop button and profile switcher stay active). */
 .rich-input-disabled {
   opacity: 0.65;
-}
-
-/* ---- Chips row ---- */
-.rich-input-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 10px 14px 0;
-}
-
-.ri-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 8px 3px 6px;
-  border-radius: 8px;
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1;
-  white-space: nowrap;
-  animation: chipIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-@keyframes chipIn {
-  from { opacity: 0; transform: scale(0.9) translateY(4px); }
-  to   { opacity: 1; transform: scale(1) translateY(0); }
-}
-
-.ri-chip-skill {
-  background: rgba(203, 139, 92, 0.15);
-  color: var(--accent-color);
-  border: 1px solid rgba(203, 139, 92, 0.25);
-}
-
-.ri-chip-mcp {
-  background: rgba(52, 211, 153, 0.12);
-  color: var(--success-color);
-  border: 1px solid rgba(52, 211, 153, 0.2);
-}
-
-.ri-chip-label {
-  max-width: 120px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.ri-chip-meta {
-  font-size: 10px;
-  opacity: 0.7;
-  padding-left: 2px;
-}
-
-.ri-chip-remove {
-  all: unset;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-  border-radius: 4px;
-  cursor: pointer;
-  opacity: 0.6;
-  transition: opacity 0.15s, background 0.15s;
-}
-
-.ri-chip-remove:hover {
-  opacity: 1;
-  background: rgba(255, 255, 255, 0.1);
 }
 
 /* ---- Textarea ---- */
