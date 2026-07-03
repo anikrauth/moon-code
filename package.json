@@ -1,5 +1,5 @@
 {
-  "name": "moon-agent",
+  "name": "moon-code",
   "version": "1.0.0",
   "description": "",
   "main": "dist/main/main.js",
@@ -40,6 +40,9 @@
     "wait-on": "^9.0.10"
   },
   "build": {
+    "appId": "com.moonagent.desktop",
+    "productName": "Moon Agent",
+    "icon": "build/icon.png",
     "directories": {
       "output": "release"
     },

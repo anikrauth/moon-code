@@ -28,4 +28,5 @@ contextBridge.exposeInMainWorld('electron', {
     ipcRenderer.removeAllListeners('mcp:event');
     ipcRenderer.on('mcp:event', (_event, value) => callback(value));
   },
+  compactNow: (profileId: string, history: any) => ipcRenderer.invoke('agent:compact', profileId, history),
 });

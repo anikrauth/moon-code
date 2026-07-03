@@ -1,8 +1,9 @@
 // @ts-nocheck
 import React, { useState, useEffect, useRef } from 'react';
-import { FolderOpen, Settings, Bot, X, Plus, History } from 'lucide-react';
+import { FolderOpen, Settings, X, Plus, History } from 'lucide-react';
 import RichInput, { SkillItem } from './RichInput';
-import SkillsPanel, { SkillEntry, SKILL_CATALOG } from './SkillsPanel';
+import SkillsPanel from './SkillsPanel';
+import { SKILL_CATALOG } from '../shared/skillCatalog';
 import McpPanel from './McpPanel';
 import SessionsPanel from './SessionsPanel';
 import { JSONUIProvider, Renderer } from '@json-render/react';
@@ -314,7 +315,7 @@ export default function App() {
   };
 
   /* ---- Skills handlers ---- */
-  const handleToggleSkill = (skill: SkillEntry) => {
+  const handleToggleSkill = (skill: any) => {
     setActiveSkills((prev) => {
       const exists = prev.find((s) => s.id === skill.id);
       const next = exists
@@ -364,6 +365,63 @@ export default function App() {
     window.electron?.upsertMcpServer({ name: preset.name, transport: 'stdio', command: preset.command, args })
       .then((d: any) => d && setMcpData(d));
   };
+
+  /* ---- Slash commands ---- */
+  const appendLocalNote = (content: string) => {
+    setMessages((prev) => [...prev, { id: Date.now().toString(), role: 'assistant', content }]);
+  };
+
+  const baseCommands = [
+    { name: 'clear', description: 'Start a new chat', run: () => startNewChat() },
+    { name: 'compact', description: 'Compact conversation history now', run: async () => {
+        if (isTyping) return;
+        if (!activeProfile?.hasKey) { appendLocalNote('No active model profile with an API key — configure one in Settings.'); return; }
+        if (!history || history.length <= 2) { appendLocalNote('Nothing to compact yet.'); return; }
+        const before = history.length;
+        setIsTyping(true);
+        try {
+          const res = await window.electron?.compactNow(config.activeProfileId, history);
+          if (res?.ok) {
+            setHistory(res.history);
+            appendLocalNote(`History compacted: ${before} → ${res.history.length} messages.`);
+          } else {
+            appendLocalNote(`Compaction failed${res?.error ? `: ${res.error}` : '.'}`);
+          }
+        } finally {
+          setIsTyping(false);
+        }
+      } },
+    { name: 'model', description: 'Switch model profile: /model <name>', run: (arg?: string) => {
+        const profiles = config?.profiles ?? [];
+        if (arg) {
+          const match = profiles.find((p: any) => p.name.toLowerCase().includes(arg.toLowerCase()));
+          if (match) {
+            window.electron?.setActiveProfile(match.id).then(setConfig);
+            appendLocalNote(`Model switched to ${match.name}.`);
+            return;
+          }
+        }
+        appendLocalNote(`Profiles: ${profiles.map((p: any) => p.name).join(', ') || '(none configured)'}. Usage: /model <name>.`);
+      } },
+    { name: 'skills', description: 'Open the skills panel', run: () => setShowSkillsPanel(true) },
+    { name: 'sessions', description: 'Open saved sessions', run: async () => {
+        const list = await window.electron?.listSessions();
+        setSessionList(list ?? []);
+        setShowSessionsPanel(true);
+      } },
+    { name: 'mcp', description: 'Open MCP servers', run: async () => {
+        const d = await window.electron?.mcpList?.();
+        if (d) setMcpData(d);
+        setShowMcpPanel(true);
+      } },
+    { name: 'settings', description: 'Open settings', run: () => setShowSettings(true) },
+  ];
+  const slashCommands = [
+    ...baseCommands,
+    { name: 'help', description: 'List available commands', run: () =>
+        appendLocalNote(baseCommands.concat([{ name: 'help', description: 'List available commands' }])
+          .map((c: any) => `/${c.name} — ${c.description}`).join('\n')) },
+  ];
 
   const respondPermission = (allow: boolean, alwaysAllow: boolean) => {
     const req = permissionQueue[0];
@@ -653,9 +711,7 @@ export default function App() {
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <div style={{ background: 'var(--accent-color)', borderRadius: '50%', padding: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <Bot size={20} color="#fff" />
-            </div>
+            <img src="./moon-logo.png" width={28} height={28} alt="Moon Agent" />
             <h1 style={{ margin: 0, fontSize: '18px', fontWeight: 600 }}>Moon Agent</h1>
         </div>
         
@@ -724,7 +780,8 @@ export default function App() {
                             padding: '12px 16px',
                             borderRadius: '12px',
                             maxWidth: '80%',
-                            lineHeight: '1.5'
+                            lineHeight: '1.5',
+                            whiteSpace: 'pre-wrap'
                         }}>
                             {msg.role === 'assistant' ? (
                                 <AssistantContent content={msg.content} streaming={isTyping && i === messages.length - 1} />
@@ -765,6 +822,7 @@ export default function App() {
           onSelectProfile={(id) => window.electron?.setActiveProfile(id).then(setConfig)}
           busy={isTyping}
           onStop={() => window.electron?.cancelPrompt()}
+          commands={slashCommands}
         />
       </div>
     </div>
