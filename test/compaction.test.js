@@ -7,13 +7,18 @@ const { handlePrompt } = require('../dist/main/agent.js');
 const longHistory = () => Array.from({ length: 25 }, (_, i) => ({
   role: i % 2 ? 'assistant' : 'user', content: `turn ${i}` }));
 
-function run(server, history) {
+function run(server, history, extraSettings = {}) {
   return new Promise((resolve) => {
     const events = [];
-    handlePrompt('next question', process.cwd(), { apiKey: 'k', baseUrl: baseUrlOf(server), model: 'mock' },
+    handlePrompt('next question', process.cwd(), { apiKey: 'k', baseUrl: baseUrlOf(server), model: 'mock', ...extraSettings },
       history, (e) => { events.push(e); if (e.type === 'done') resolve(events); }, async () => true);
   });
 }
+
+// 'mock' resolves to the fallback limits (128k window → ~93k token budget).
+// The huge-history tests pass a small contextWindow override so ~45k estimated
+// tokens exceed the derived budget: 0.75 × (60000 − 4096) ≈ 42k.
+const SMALL_WINDOW = { contextWindow: 60000 };
 
 test('history over MAX_HISTORY is summarized into one message', async (t) => {
   const server = await startServer((body) =>
@@ -56,7 +61,7 @@ test('few huge messages trigger token-based compaction', async (t) => {
   t.after(() => server.close());
   const huge = Array.from({ length: 6 }, (_, i) => ({
     role: i % 2 ? 'assistant' : 'user', content: `turn ${i} ` + 'x'.repeat(30000) }));
-  const events = await run(server, huge);
+  const events = await run(server, huge, SMALL_WINDOW);
   const summarizeReq = server.requests.find((b) => !b.tools);
   assert.ok(summarizeReq, 'token budget exceeded -> summarize call made');
   const mainReq = server.requests.find((b) => b.tools);
@@ -71,7 +76,7 @@ test('summarize failure on short huge history falls back without losing conversa
   t.after(() => server.close());
   const huge = Array.from({ length: 6 }, (_, i) => ({
     role: i % 2 ? 'assistant' : 'user', content: `turn ${i} ` + 'x'.repeat(30000) }));
-  const events = await run(server, huge);
+  const events = await run(server, huge, SMALL_WINDOW);
   const done = events.find((e) => e.type === 'done');
   assert.ok(done.history && done.history.length >= 8, 'history preserved via slice fallback');
   assert.strictEqual(events.filter((e) => e.type === 'error').length, 0);
