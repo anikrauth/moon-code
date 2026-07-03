@@ -113,7 +113,7 @@ async function loadProjectMemory(workspace: string): Promise<string> {
     }
 }
 
-function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpawn, settings, spawnState, abortSignal, extraTools, limits }) {
+function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpawn, settings, spawnState, abortSignal, extraTools, limits, skillsCatalog }) {
     const emit = (e) => onEvent({ agent: agentId, ...e });
     const denied = (name) => {
         const res = 'User denied permission for this action.';
@@ -317,6 +317,23 @@ function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpaw
             }
         })
     };
+    if (skillsCatalog && skillsCatalog.length > 0) {
+        tools.skill = tool({
+            description: 'Load the full instructions for one of the AVAILABLE SKILLS listed in the system prompt. Call this before starting work that matches a skill\'s description — it returns the skill\'s complete procedure, which you must then follow for the rest of the task.',
+            inputSchema: z.object({
+                skill_id: z.string().describe('The exact id of the skill to load, as listed in AVAILABLE SKILLS.'),
+            }),
+            execute: async ({ skill_id }) => {
+                emit({ type: 'tool_call', name: 'skill', arguments: JSON.stringify({ skill_id }) });
+                const found = skillsCatalog.find((s) => s.id === skill_id);
+                const res = found
+                    ? found.content
+                    : `Error: no skill named "${skill_id}". Available: ${skillsCatalog.map((s) => s.id).join(', ')}`;
+                emit({ type: 'tool_result', name: 'skill', result: res });
+                return res;
+            }
+        });
+    }
     if (includeSpawn) {
         tools.spawn_agent = tool({
             description: 'Delegate a self-contained task to a parallel subagent with its own tool access. The subagent cannot ask you questions — include all needed context in the task. Returns its plain-text findings. You may call spawn_agent multiple times in one step to run tasks in parallel.',
@@ -330,7 +347,7 @@ function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpaw
 ${spawnState.projectMemory ? `\nPROJECT INSTRUCTIONS (from MOON.md in the workspace root — follow these):\n${spawnState.projectMemory}\n` : ''}
 ${spawnState.skillsText ? `\n${spawnState.skillsText}\n` : ''}`;
                 try {
-                    const subTools = makeTools({ workspace, onEvent, requestPermission, agentId: subId, includeSpawn: false, settings, spawnState, abortSignal, extraTools, limits });
+                    const subTools = makeTools({ workspace, onEvent, requestPermission, agentId: subId, includeSpawn: false, settings, spawnState, abortSignal, extraTools, limits, skillsCatalog: spawnState.skillsCatalog });
                     const { text } = await runAgentLoop({
                         prompt: task, workspace, settings, history: [],
                         onEvent, requestPermission, agentId: subId,
@@ -446,6 +463,7 @@ export async function handlePrompt(
     extraTools?: any,
     skillsText?: string,
     usageHint?: { lastInputTokens?: number; skillContent?: string },
+    skillsCatalog?: { id: string; description: string; content: string }[],
 ) {
     try {
         const limits = resolveLimits(settings?.model, settings);
@@ -473,7 +491,9 @@ ${catalog.prompt({
 
         const tools = makeTools({
             workspace, onEvent, requestPermission, agentId: 'main',
-            includeSpawn: true, settings, spawnState: { counter: 0, projectMemory, skillsText: skillsText ?? '' }, abortSignal, extraTools, limits,
+            includeSpawn: true, settings,
+            spawnState: { counter: 0, projectMemory, skillsText: skillsText ?? '', skillsCatalog: skillsCatalog ?? [] },
+            abortSignal, extraTools, limits, skillsCatalog: skillsCatalog ?? [],
         });
 
         const { responseMessages, usage } = await runAgentLoop({

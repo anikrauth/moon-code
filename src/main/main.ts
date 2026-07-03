@@ -190,14 +190,18 @@ app.whenReady().then(() => {
         ? 'ACTIVE SKILLS — follow these working practices:\n\n' + activeSkills.map((s) => `${s.name}:\n${s.instructions}`).join('\n\n')
         : '';
     const discovered = scanSkills(workspace);
-    const invocableSkills = discovered.filter((s) => s.userInvocable && !s.disableModelInvocation);
+    const invocableSkills = discovered.filter((s) => !s.disableModelInvocation);
+    // Progressive disclosure (Claude Code / Codex style): the model only sees
+    // id + description up front. Full instructions are loaded on demand via
+    // the `skill` tool (see agent.ts), not inlined into the prompt.
     const catalogText = invocableSkills.length
-        ? 'AVAILABLE SKILLS — invoke with /skill-name or use when relevant:\n' + invocableSkills.map((s) => `- ${s.id}: ${s.description}`).join('\n')
+        ? 'AVAILABLE SKILLS — call the `skill` tool with the id to load full instructions before starting matching work:\n' + invocableSkills.map((s) => `- ${s.id}: ${s.description}`).join('\n')
         : '';
     const skillsText = [bundledSkillsText, catalogText].filter(Boolean).join('\n\n');
+    const skillsCatalog = invocableSkills.map((s) => ({ id: s.id, description: s.description, content: s.content }));
     handlePrompt(prompt, workspace, settings, history, (agentEvent) => {
       event.reply('agent:event', agentEvent);
-    }, requestPermission, activeTurn.signal, mcpManager.getAgentTools(), skillsText, meta);
+    }, requestPermission, activeTurn.signal, mcpManager.getAgentTools(), skillsText, meta, skillsCatalog);
   });
 
   ipcMain.on('agent:permission-response', (_event, id: string, allow: boolean, alwaysAllow: boolean) => {

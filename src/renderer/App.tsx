@@ -51,7 +51,7 @@ function ToolActivity({ tool }: { tool: any }) {
   let preview = '';
   try {
     const args = JSON.parse(tool.arguments ?? '{}');
-    preview = args.command ?? args.filePath ?? args.dirPath ?? args.task ?? args.pattern ?? '';
+    preview = args.command ?? args.filePath ?? args.dirPath ?? args.task ?? args.pattern ?? args.skill_id ?? '';
   } catch {
     // unparseable arguments — show no preview
   }
@@ -251,6 +251,12 @@ export default function App() {
             newMsgs.push({ id: Date.now().toString(), role: 'assistant', content: event.content });
           }
         } else if (event.type === 'tool_call') {
+          if (event.name === 'skill') {
+            try {
+              const { skill_id } = JSON.parse(event.arguments ?? '{}');
+              if (skill_id) setInvokedSkills((prev) => (prev.includes(skill_id) ? prev : [...prev, skill_id]));
+            } catch { /* unparseable arguments — skip badge update */ }
+          }
           if (lastMsg && lastMsg.role === 'assistant') {
             newMsgs[lastIdx] = { ...lastMsg, toolCalls: [...(lastMsg.toolCalls || []), event] };
           } else {
@@ -651,8 +657,38 @@ export default function App() {
         </div>
       )}
 
-      {/* Main column + sidebar */}
+      {/* Sidebar + main column */}
       <div style={{ display: 'flex', flexDirection: 'row', flex: 1, minHeight: 0, gap: '20px' }}>
+
+      <Sidebar
+        activeTab={sidebarTab}
+        onTabChange={setSidebarTab}
+        activeSkillIds={activeSkills.map((s) => s.id)}
+        onToggleSkill={handleToggleSkill}
+        discoveredSkills={discoveredSkills}
+        invokedSkillIds={invokedSkills}
+        onInvokeSkill={(id: string) => { invokeSkillById(id); setSidebarTab(null); }}
+        onCreateSkill={handleCreateSkill}
+        mcpData={mcpData}
+        busy={isTyping}
+        onConnectMcpServer={(id: string) => window.electron?.connectMcp(id).then(setMcpData)}
+        onDisconnectMcpServer={(id: string) => window.electron?.disconnectMcp(id).then(setMcpData)}
+        onSaveMcpServer={(def: any, secrets: any) => window.electron?.upsertMcpServer(def, secrets).then(setMcpData)}
+        onDeleteMcpServer={(id: string) => window.electron?.deleteMcpServer(id).then(setMcpData)}
+        onAddMcpPreset={handleAddMcpPreset}
+        sessions={sessionList}
+        onSelectSession={handleSelectSession}
+        onDeleteSession={handleDeleteSession}
+        config={config}
+        onSetActiveProfile={(id: string) => window.electron?.setActiveProfile(id).then(setConfig)}
+        onSaveProfile={(profile: any, apiKey?: string) => window.electron?.upsertProfile(profile, apiKey).then(setConfig)}
+        onDeleteProfile={(id: string) => window.electron?.deleteProfile(id).then(setConfig)}
+        sessionUsage={sessionUsage}
+        contextInfo={displayContext}
+        activeProfile={activeProfile}
+        activeLimits={activeLimits}
+      />
+
       <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
 
       {/* Header */}
@@ -760,35 +796,6 @@ export default function App() {
       </div>
 
       </div>
-
-      <Sidebar
-        activeTab={sidebarTab}
-        onTabChange={setSidebarTab}
-        activeSkillIds={activeSkills.map((s) => s.id)}
-        onToggleSkill={handleToggleSkill}
-        discoveredSkills={discoveredSkills}
-        invokedSkillIds={invokedSkills}
-        onInvokeSkill={(id: string) => { invokeSkillById(id); setSidebarTab(null); }}
-        onCreateSkill={handleCreateSkill}
-        mcpData={mcpData}
-        busy={isTyping}
-        onConnectMcpServer={(id: string) => window.electron?.connectMcp(id).then(setMcpData)}
-        onDisconnectMcpServer={(id: string) => window.electron?.disconnectMcp(id).then(setMcpData)}
-        onSaveMcpServer={(def: any, secrets: any) => window.electron?.upsertMcpServer(def, secrets).then(setMcpData)}
-        onDeleteMcpServer={(id: string) => window.electron?.deleteMcpServer(id).then(setMcpData)}
-        onAddMcpPreset={handleAddMcpPreset}
-        sessions={sessionList}
-        onSelectSession={handleSelectSession}
-        onDeleteSession={handleDeleteSession}
-        config={config}
-        onSetActiveProfile={(id: string) => window.electron?.setActiveProfile(id).then(setConfig)}
-        onSaveProfile={(profile: any, apiKey?: string) => window.electron?.upsertProfile(profile, apiKey).then(setConfig)}
-        onDeleteProfile={(id: string) => window.electron?.deleteProfile(id).then(setConfig)}
-        sessionUsage={sessionUsage}
-        contextInfo={displayContext}
-        activeProfile={activeProfile}
-        activeLimits={activeLimits}
-      />
 
       </div>
     </div>
