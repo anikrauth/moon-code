@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { compileSpecStream, autoFixSpec, isNonEmptySpec, validateSpec, formatSpecIssues } from '@json-render/core';
-import { catalog } from './uiCatalog';
+import { catalog } from '../config/uiCatalog';
 
 export type ParseResult = { ok: true; spec: any } | { ok: false; error: string };
 

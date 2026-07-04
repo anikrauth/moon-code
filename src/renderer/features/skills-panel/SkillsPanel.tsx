@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState, useEffect } from 'react';
 import { Search, Puzzle, Plus, FileText, Download, Store, Globe } from 'lucide-react';
-import { SKILL_MARKETPLACE } from '../shared/skillMarketplace';
+import { SKILL_MARKETPLACE } from '@shared/config/skillMarketplace';
 
 /* ------------------------------------------------------------------ */
 /*  Props                                                              */

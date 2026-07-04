@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { startServer, textChunks, baseUrlOf } = require('./helpers/fake-openai');
-const { handlePrompt } = require('../dist/main/agent.js');
+const { handlePrompt } = require('../dist/main/features/agent/index.js');
 
 function runTurn(server, { history, permission = async () => true, workspace = process.cwd() } = {}) {
   return new Promise((resolve) => {

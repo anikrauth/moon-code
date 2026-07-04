@@ -1,22 +1,22 @@
 // @ts-nocheck
 import React, { useState, useEffect, useRef } from 'react';
-import RichInput from './RichInput';
-import TaskSidebar from './TaskSidebar';
-import TopBar from './TopBar';
-import RightPanel from './RightPanel';
-import OverlayModal from './OverlayModal';
-import { ToolChip, TurnSummaryCard } from './ToolChips';
-import SkillsPanel from './SkillsPanel';
-import McpPanel from './McpPanel';
-import SettingsPanel from './SettingsPanel';
-import UsagePanel from './UsagePanel';
-import { resolveLimits } from '../shared/modelLimits';
+import RichInput from './features/chat-input/RichInput';
+import TaskSidebar from './widgets/task-sidebar/TaskSidebar';
+import TopBar from './widgets/top-bar/TopBar';
+import RightPanel from './widgets/right-panel/RightPanel';
+import OverlayModal from './widgets/overlay-modal/OverlayModal';
+import { ToolChip, TurnSummaryCard } from './features/tool-chips/ToolChips';
+import SkillsPanel from './features/skills-panel/SkillsPanel';
+import McpPanel from './features/mcp-panel/McpPanel';
+import SettingsPanel from './features/settings-panel/SettingsPanel';
+import UsagePanel from './features/usage-panel/UsagePanel';
+import { resolveLimits } from '@shared/lib/modelLimits';
 import { JSONUIProvider, Renderer } from '@json-render/react';
-import { registry } from './uiRegistry';
-import { parseAssistantContent } from './parseAssistantContent';
-import { parseRenderUiSpec } from '../shared/renderUiSpec';
-import Markdown from './Markdown';
-import PermissionRequest from './PermissionRequest';
+import { registry } from './entities/ui-spec/uiRegistry';
+import { parseAssistantContent } from './entities/chat-message/parseAssistantContent';
+import { parseRenderUiSpec } from '@shared/lib/renderUiSpec';
+import Markdown from './entities/chat-message/Markdown';
+import PermissionRequest from './features/permission-request/PermissionRequest';
 
 /* Renderer throws on specs that pass validation but fail at render time;
    without a boundary React unmounts the whole app. Fall back to raw text. */

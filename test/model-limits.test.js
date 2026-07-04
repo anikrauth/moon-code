@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { resolveLimits, FALLBACK_LIMITS } = require('../dist/shared/modelLimits.js');
+const { resolveLimits, FALLBACK_LIMITS } = require('../dist/shared/lib/modelLimits.js');
 
 test('fallback for unknown model and missing id', () => {
     assert.deepStrictEqual(resolveLimits('totally-unknown-model'), FALLBACK_LIMITS);

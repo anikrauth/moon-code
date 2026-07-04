@@ -6,17 +6,23 @@ import { scanSkills } from './skillScanner';
 const execFileAsync = promisify(execFile);
 
 // "owner/repo" or "owner/repo@skill" — letters, digits, dot, dash, underscore
-// only. This is passed to execFile as a bare arg (no shell), but we still
-// validate to reject path traversal, flags, and anything that isn't a real
-// package spec before we download and run third-party code.
-const SPEC_RE = /^[\w.-]+\/[\w.-]+(@[\w.-]+)?$/;
+// only, and no segment may START with a dot (blocks "." / ".." / ".hidden" and,
+// critically, "./evil" — a bare "." would otherwise satisfy `[\w.-]+` and let
+// npx treat the spec as a local relative path instead of a package name).
+const SPEC_RE = /^[\w-][\w.-]*\/[\w-][\w.-]*(@[\w-][\w.-]*)?$/;
 
 export function isValidSkillSpec(spec) {
   if (typeof spec !== 'string') return false;
   const s = spec.trim();
-  // Reject path traversal: `.` is allowed in names, so `../evil` matches the
-  // shape regex — npx would then treat it as a local path. No `..` ever.
+  // Reject path traversal: `.` is allowed mid-name, so `../evil` matches the
+  // shape regex — npx would then treat it as a local path. No `..` ever, and
+  // explicitly reject a bare "." or ".." owner/repo segment even though the
+  // tightened SPEC_RE above already can't match either (defense-in-depth).
   if (s.includes('..')) return false;
+  const [owner, rest] = s.split('/');
+  if (owner === '.' || owner === '..') return false;
+  const repo = rest?.split('@')[0];
+  if (repo === '.' || repo === '..') return false;
   return SPEC_RE.test(s);
 }
 

@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const http = require('http');
 const { startServer, textChunks, toolCallChunk, chunk, baseUrlOf } = require('./helpers/fake-openai');
-const { handlePrompt } = require('../dist/main/agent.js');
+const { handlePrompt } = require('../dist/main/features/agent/index.js');
 
 // Server that sends one delta then stalls forever (never closes the stream).
 function startStallingServer() {

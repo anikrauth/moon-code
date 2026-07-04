@@ -10,7 +10,16 @@
     "forceConsistentCasingInFileNames": true,
     "outDir": "./dist",
     "rootDir": "./src",
-    "ignoreDeprecations": "6.0"
+    "ignoreDeprecations": "6.0",
+    "baseUrl": ".",
+    "paths": {
+      "@app/*": ["src/renderer/app/*"],
+      "@pages/*": ["src/renderer/pages/*"],
+      "@widgets/*": ["src/renderer/widgets/*"],
+      "@features/*": ["src/renderer/features/*"],
+      "@entities/*": ["src/renderer/entities/*"],
+      "@shared/*": ["src/shared/*"]
+    }
   },
   "include": ["src/**/*"]
 }

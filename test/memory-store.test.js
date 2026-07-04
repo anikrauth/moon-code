@@ -3,7 +3,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { createMemoryStore } = require('../dist/main/memoryStore.js');
+const { createMemoryStore } = require('../dist/main/features/memory/memoryStore.js');
 
 function setup() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'moon-mem-home-'));

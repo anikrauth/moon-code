@@ -3,7 +3,7 @@ import React, { useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import hljs from 'highlight.js';
-import { splitMarkdownBlocks, closeDanglingFence } from '../shared/markdownBlocks';
+import { splitMarkdownBlocks, closeDanglingFence } from '@shared/lib/markdownBlocks';
 
 /* Fenced code blocks reuse the same highlight.js path as the JSON-UI CodeBlock
    (uiRegistry.tsx) so highlighting is consistent across both render paths. */
