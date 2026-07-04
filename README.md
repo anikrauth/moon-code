@@ -30,47 +30,59 @@
 Moon Code is built on four layers:
 
 ### 1. Electron Main Process (`src/main/`)
-The backbone — all I/O, secrets, tool execution, and agent orchestration happen here.
+The backbone — all I/O, secrets, tool execution, and agent orchestration happen here, organized Feature-Sliced-Design style: `main.ts` bootstraps the app and wires each `app/ipc/register*Ipc.ts` module, which imports only from its matching `features/<domain>/` slice.
 
-| Module | Purpose |
+| Path | Purpose |
 |---|---|
-| `main.ts` | Electron app lifecycle, IPC handler registration, window management, permission system, MCP lifecycle |
-| `agent.ts` | The core agent loop: streaming LLM calls, tool definition and execution, history compaction, subagent spawning |
-| `configStore.ts` | Durable config with OS-level encrypted API keys and MCP secrets, multi-profile management |
-| `sessionStore.ts` | atomic JSON persistence for conversation sessions with index tracking |
-| `mcpManager.ts` | MCP client lifecycle — stdio and HTTP transports, tool discovery, secret injection, reconnection |
-| `skillScanner.ts` | Scans `.moon/skills/` project and `~/.moon/skills/` personal directories for SKILL.md files with YAML frontmatter |
-| `searchTools.ts` | Blazing-fast glob and grep search — walks workspace tree, respects `.gitignore`-like filters, binary detection, max size limits |
-| `statusLine.ts` | Terminal status line with spinner, elapsed time, token counter, and Esc-key interrupt (for CLI mode) |
+| `main.ts` | Electron app lifecycle, window management, service instantiation, calls each `registerXIpc` |
+| `app/ipc/register*Ipc.ts` | One file per IPC domain (config, sessions, skills, mcp, agent, git, memory, workspace, dialog) — thin `ipcMain.handle/on` registration |
+| `app/ipc/ipcUtils.ts` | Shared generic helpers: atomic `mkdirExclusive`, promise-chain `withLock` |
+| `features/agent/` | The agent loop, split by concern: `historyCompaction.ts`, `toolRouter.ts` (tool schemas/execution + subagent spawn), `systemPrompt.ts`, `agentLoop.ts` (streaming), `index.ts` (public API) |
+| `features/config/configStore.ts` | Durable config with OS-level encrypted API keys and MCP secrets, multi-profile management |
+| `features/sessions/sessionStore.ts` | Atomic JSON persistence for conversation sessions with index tracking |
+| `features/mcp/mcpManager.ts` | MCP client lifecycle — stdio and HTTP transports, tool discovery, secret injection, reconnection |
+| `features/skills/skillScanner.ts` | Scans `.moon/skills/` project and `~/.moon/skills/` personal directories for SKILL.md files with YAML frontmatter |
+| `features/skills/skillInstaller.ts` | Installs skills from `owner/repo` package specs, disk, URL, or marketplace |
+| `features/search/searchTools.ts` | Blazing-fast glob and grep search — walks workspace tree, respects `.gitignore`-like filters, binary detection, max size limits |
+| `features/git/gitService.ts` | Git snapshot/checkout/commit via `execFile` |
+| `features/memory/memoryStore.ts` | MOON.md instruction files with `@import` resolution, learned-fact memory |
+| `features/workspace/workspaceInit.ts` | First-open `.moon` scaffolding, agent-config discovery with symlink-escape guarding |
+| `features/status/statusLine.ts` | Terminal status line with spinner, elapsed time, token counter, and Esc-key interrupt (for CLI mode) |
+| `features/diff/diffStats.ts` | Line-level add/delete diff stats for file changes |
 
 ### 2. Preload Bridge (`src/preload/preload.ts`)
 Securely exposes IPC methods to the renderer via `contextBridge.exposeInMainWorld`. Every `electron.*` call in the UI maps to a validated IPC handler.
 
 ### 3. React Renderer (`src/renderer/`)
-A fully native macOS window (hidden title bar, draggable background, blur effects) with:
+A fully native macOS window (hidden title bar, draggable background, blur effects), organized Feature-Sliced-Design style — panels have zero sideways imports between each other, everything flows through `App.tsx`'s state:
 
-| Component | Role |
+| Path | Role |
 |---|---|
-| `App.tsx` | Workspace selection, chat messages, permission modals, agent event stream, session management, status indicators, context warning banner |
-| `RichInput.tsx` | Multi-line textarea with auto-resize, slash-command autocomplete (with arrow-key navigation), toolbar with model switcher, skill badges, MCP connection count, context chip, send/stop buttons |
-| `Sidebar.tsx` | Icon rail with 4 panels: Skills, MCP Servers, Sessions, Usage + Settings |
-| `SkillsPanel.tsx` | Catalog of built-in working practices, discovered local skills, marketplace skills, create/install/URL-import buttons |
-| `McpPanel.tsx` | Server CRUD, connect/disconnect, 7 built-in presets (Filesystem, GitHub, Memory, Fetch, Puppeteer, Sequential Thinking, custom) |
-| `SessionsPanel.tsx` | Browse, select, and delete saved conversations with relative timestamps |
-| `SettingsPanel.tsx` | Multi-provider model profile management with per-profile overrides for context window and max output tokens |
-| `UsagePanel.tsx` | Real-time context window bar, session token counters, estimated cost calculation |
-| `uiRegistry.tsx` | Registers React components for `@json-render/react` rendering of agent-generated UI specs with syntax highlighting via highlight.js |
-| `parseAssistantContent.ts` | Compiles, validates, and auto-fixes agent-generated JSONL UI specs |
+| `App.tsx` | Composition root: workspace selection, chat messages, permission modals, agent event stream, session management, status indicators, context warning banner, slash commands |
+| `widgets/top-bar/TopBar.tsx` | Title bar, workspace selector, branch indicator |
+| `widgets/task-sidebar/TaskSidebar.tsx` | Session list, new task, open workspace, skills/settings entry points |
+| `widgets/right-panel/RightPanel.tsx` | Git status/commit, goal, and live progress-checklist sections |
+| `widgets/overlay-modal/OverlayModal.tsx` | Generic modal wrapper used by every panel below |
+| `features/chat-input/RichInput.tsx` | Multi-line textarea with auto-resize, slash-command autocomplete, toolbar with model switcher, skill badges, MCP connection count, context chip, send/stop buttons |
+| `features/tool-chips/ToolChips.tsx` | Tool call/result chip rendering + turn summary cards |
+| `features/skills-panel/SkillsPanel.tsx` | Catalog of built-in working practices, discovered local skills, marketplace skills, create/install/URL-import buttons |
+| `features/mcp-panel/McpPanel.tsx` | Server CRUD, connect/disconnect, built-in presets (Filesystem, GitHub, Memory, Fetch, Puppeteer, Sequential Thinking, custom) |
+| `features/settings-panel/SettingsPanel.tsx` | Multi-provider model profile management with per-profile overrides for context window and max output tokens |
+| `features/usage-panel/UsagePanel.tsx` | Real-time context window bar, session token counters, estimated cost calculation |
+| `features/permission-request/PermissionRequest.tsx` | Tool-call permission approval dialog |
+| `entities/chat-message/Markdown.tsx` + `parseAssistantContent.ts` | Streaming markdown rendering + JSONL UI-spec compilation for messages |
+| `entities/ui-spec/uiRegistry.tsx` | Registers React components for `@json-render/react` rendering of agent-generated UI specs with syntax highlighting via highlight.js |
 
 ### 4. Shared Modules (`src/shared/`)
 
-| Module | Purpose |
+| Path | Purpose |
 |---|---|
-| `uiCatalog.ts` | Zod-validated component catalog for `@json-render/core` — defines Stack, Text, List, Table, CodeBlock |
-| `modelLimits.ts` | Per-model context window, output caps, capability flags (tools/vision), and pricing table for 25+ model variants |
-| `skillCatalog.ts` | 8 built-in working-practice skills: Code Review, TDD, Systematic Debugging, Refactoring, Git Discipline, Documentation, Plan First, Concise Output |
-| `skillMarketplace.ts` | 3 bundled marketplace skills: Define Goal, Security Best Practices, CLI Creator |
-| `skillTypes.ts` | TypeScript interfaces for discovered skills and bundled skills |
+| `config/uiCatalog.ts` | Zod-validated component catalog for `@json-render/core` — defines Stack, Text, List, Table, CodeBlock |
+| `lib/modelLimits.ts` | Per-model context window, output caps, capability flags (tools/vision), and pricing table for 25+ model variants |
+| `lib/markdownBlocks.ts` | Streaming markdown block-splitting utilities |
+| `lib/renderUiSpec.ts` | SpecStream JSONL validation/parsing |
+| `config/skillMarketplace.ts` | Bundled marketplace skills: Define Goal, Security Best Practices, CLI Creator |
+| `types/skillTypes.ts` | TypeScript interfaces for discovered skills and bundled skills |
 
 ---
 
@@ -255,38 +267,54 @@ npm test
 
 ## 📁 Project Structure
 
+Feature-Sliced Design: each process (`main`, `renderer`) nests `app → features/widgets → entities` layers inside its own tree; a layer only imports from itself or a layer below.
+
 ```
 moon-code/
 ├── src/
-│   ├── main/           # Electron main process
-│   │   ├── main.ts     # App lifecycle, IPC, permissions, MCP lifecycle
-│   │   ├── agent.ts    # Agent loop, tools, compaction, subagents
-│   │   ├── configStore.ts    # Encrypted config with multi-profile + MCP servers
-│   │   ├── sessionStore.ts   # Atomic JSON session persistence
-│   │   ├── mcpManager.ts     # MCP client lifecycle + tool injection
-│   │   ├── skillScanner.ts   # Local skill discovery
-│   │   ├── searchTools.ts    # Glob + grep with workspace safety
-│   │   └── statusLine.ts     # Terminal spinner for CLI mode
-│   ├── renderer/       # React frontend
-│   │   ├── App.tsx           # Orchestrator: chat, permissions, state
-│   │   ├── RichInput.tsx     # Multi-line input, slash commands, toolbar
-│   │   ├── Sidebar.tsx       # Rail navigation to 5 panels
-│   │   ├── SkillsPanel.tsx   # Catalog + local + marketplace skills
-│   │   ├── McpPanel.tsx      # MCP server management
-│   │   ├── SessionsPanel.tsx # Session browsing
-│   │   ├── SettingsPanel.tsx # Model profile CRUD
-│   │   ├── UsagePanel.tsx    # Token/cost display
-│   │   ├── uiRegistry.tsx    # UI component registry for json-render
-│   │   ├── parseAssistantContent.ts  # JSONL spec compilation
-│   │   └── index.css         # All styles (dark theme, glassmorphism)
+│   ├── main/                      # Electron main process
+│   │   ├── main.ts                # App lifecycle, window, service wiring, calls registerXIpc
+│   │   ├── app/ipc/               # Thin per-domain ipcMain.handle/on registration
+│   │   │   ├── register{Config,Sessions,Skills,Mcp,Agent,Git,Memory,Workspace,Dialog}Ipc.ts
+│   │   │   └── ipcUtils.ts        # mkdirExclusive (TOCTOU-safe), withLock (promise-chain)
+│   │   └── features/
+│   │       ├── agent/             # historyCompaction, toolRouter, systemPrompt, agentLoop, index
+│   │       ├── config/configStore.ts
+│   │       ├── sessions/sessionStore.ts
+│   │       ├── mcp/mcpManager.ts
+│   │       ├── skills/{skillScanner,skillInstaller}.ts
+│   │       ├── search/searchTools.ts
+│   │       ├── git/gitService.ts
+│   │       ├── memory/memoryStore.ts
+│   │       ├── workspace/workspaceInit.ts
+│   │       ├── status/statusLine.ts
+│   │       └── diff/diffStats.ts
+│   ├── renderer/                  # React frontend
+│   │   ├── App.tsx                # Composition root: chat, permissions, session/git/skills state
+│   │   ├── index.tsx
+│   │   ├── widgets/                # Layout-shell pieces
+│   │   │   ├── top-bar/TopBar.tsx
+│   │   │   ├── task-sidebar/TaskSidebar.tsx
+│   │   │   ├── right-panel/RightPanel.tsx
+│   │   │   └── overlay-modal/OverlayModal.tsx
+│   │   ├── features/                # Self-contained interactive panels
+│   │   │   ├── chat-input/RichInput.tsx
+│   │   │   ├── tool-chips/ToolChips.tsx
+│   │   │   ├── skills-panel/SkillsPanel.tsx
+│   │   │   ├── mcp-panel/McpPanel.tsx
+│   │   │   ├── settings-panel/SettingsPanel.tsx
+│   │   │   ├── usage-panel/UsagePanel.tsx
+│   │   │   └── permission-request/PermissionRequest.tsx
+│   │   ├── entities/                 # Pure display/data-shape, no side effects
+│   │   │   ├── chat-message/{Markdown,parseAssistantContent}.ts(x)
+│   │   │   └── ui-spec/uiRegistry.tsx
+│   │   └── index.css                 # All styles (dark theme, glassmorphism)
 │   ├── preload/
 │   │   └── preload.ts  # Secure IPC bridge
-│   └── shared/
-│       ├── uiCatalog.ts      # Component definitions for json-render
-│       ├── modelLimits.ts    # 25+ model configs + pricing
-│       ├── skillCatalog.ts   # 8 built-in working-practice skills
-│       ├── skillMarketplace.ts # 3 bundled marketplace skills
-│       └── skillTypes.ts     # TypeScript interfaces
+│   └── shared/                    # Framework-agnostic, importable by main + renderer
+│       ├── lib/{modelLimits,markdownBlocks,renderUiSpec}.ts
+│       ├── types/skillTypes.ts
+│       └── config/{uiCatalog,skillMarketplace}.ts
 ├── marketplace-skills/  # Bundled skill SKILL.md files
 ├── docs/superpowers/   # Design docs and implementation plans
 └── test/               # Comprehensive test suite
