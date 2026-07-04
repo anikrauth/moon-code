@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { app, BrowserWindow, safeStorage } from 'electron';
+import { app, BrowserWindow, safeStorage, shell } from 'electron';
 import * as path from 'path';
 import { createConfigStore } from './features/config/configStore';
 import { createSessionStore } from './features/sessions/sessionStore';
@@ -33,8 +33,19 @@ function createWindow() {
       preload: path.join(__dirname, '../preload/preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false
+      sandbox: true
     },
+  });
+
+  // Chat markdown renders target="_blank" links; hand http(s) to the OS
+  // browser and never spawn a child BrowserWindow from renderer content.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('https:') || url.startsWith('http:')) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const isDevServer = !app.isPackaged && url.startsWith('http://localhost:5173');
+    if (!isDevServer && !url.startsWith('file:')) event.preventDefault();
   });
 
   // Check if we are in dev mode (Vite dev server)

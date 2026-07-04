@@ -90,8 +90,10 @@ export function ToolChip({ tool }: { tool: any }) {
   let preview = '';
   try {
     const args = JSON.parse(tool.arguments ?? '{}');
-    preview = args.command ?? args.filePath ?? args.dirPath ?? args.task ?? args.pattern ?? args.skill_id ?? args.name ?? '';
-  } catch { /* unparseable arguments — no preview */ }
+    preview = String(args.command ?? args.filePath ?? args.dirPath ?? args.task ?? args.pattern ?? args.skill_id ?? args.name ?? '');
+  } catch (e) {
+    console.warn('[moon] tool arguments unparseable', e); // no preview
+  }
   if (preview.length > 72) preview = `${preview.slice(0, 72)}…`;
 
   const label = TOOL_LABELS[tool.name] ?? tool.name;

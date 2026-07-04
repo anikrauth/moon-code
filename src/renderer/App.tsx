@@ -6,17 +6,18 @@ import TopBar from './widgets/top-bar/TopBar';
 import RightPanel from './widgets/right-panel/RightPanel';
 import OverlayModal from './widgets/overlay-modal/OverlayModal';
 import { ToolChip, TurnSummaryCard } from './features/tool-chips/ToolChips';
-import SkillsPanel from './features/skills-panel/SkillsPanel';
-import McpPanel from './features/mcp-panel/McpPanel';
-import SettingsPanel from './features/settings-panel/SettingsPanel';
-import UsagePanel from './features/usage-panel/UsagePanel';
+const SkillsPanel = React.lazy(() => import('./features/skills-panel/SkillsPanel'));
+const McpPanel = React.lazy(() => import('./features/mcp-panel/McpPanel'));
+const SettingsPanel = React.lazy(() => import('./features/settings-panel/SettingsPanel'));
+const UsagePanel = React.lazy(() => import('./features/usage-panel/UsagePanel'));
 import { resolveLimits } from '@shared/lib/modelLimits';
 import { JSONUIProvider, Renderer } from '@json-render/react';
 import { registry } from './entities/ui-spec/uiRegistry';
 import { parseAssistantContent } from './entities/chat-message/parseAssistantContent';
 import { parseRenderUiSpec } from '@shared/lib/renderUiSpec';
-import Markdown from './entities/chat-message/Markdown';
+import Markdown, { setLinkWorkspace } from './entities/chat-message/Markdown';
 import PermissionRequest from './features/permission-request/PermissionRequest';
+import QuestionPrompt from './features/question-prompt/QuestionPrompt';
 
 /* Renderer throws on specs that pass validation but fail at render time;
    without a boundary React unmounts the whole app. Fall back to raw text. */
@@ -57,7 +58,8 @@ function UiWidgetBlock({ tool }: { tool: any }) {
   const parsed = React.useMemo(() => {
     try {
       return parseRenderUiSpec(JSON.parse(tool.arguments ?? '{}').spec ?? '');
-    } catch {
+    } catch (e) {
+      console.warn('[moon] render_ui arguments unparseable', e);
       return { ok: false, error: 'unparseable arguments' };
     }
   }, [tool.arguments]);
@@ -72,6 +74,11 @@ function UiWidgetBlock({ tool }: { tool: any }) {
     </div>
   );
 }
+
+/* Message ids are React keys: Date.now() alone collides when two messages are
+   created in the same millisecond (e.g. error + note), so add a counter. */
+let msgSeq = 0;
+const nextMsgId = () => `m${Date.now().toString(36)}-${++msgSeq}`;
 
 interface ChatMessage {
   id: string;
@@ -160,6 +167,7 @@ export default function App() {
 
   /* ---- MCP state ---- */
   const [permissionQueue, setPermissionQueue] = useState<any[]>([]);
+  const [questionQueue, setQuestionQueue] = useState<any[]>([]);
   const [mcpData, setMcpData] = useState<any>({ servers: [], statuses: {} });
 
   /* ---- Sessions state ---- */
@@ -189,6 +197,8 @@ export default function App() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  useEffect(() => { setLinkWorkspace(workspace); }, [workspace]);
+
   /* The `done` handler runs inside a listener registered once (see the `[]`
      effect below), so it cannot read fresh React state — it would see stale
      closures. This ref is kept in sync via its own effect and read from
@@ -207,11 +217,12 @@ export default function App() {
   useEffect(() => {
     // Listen for events from main process (only available inside Electron)
     if (!window.electron?.onAgentEvent) return;
-    window.electron.onAgentEvent((event: any) => {
+    const unsubscribe = window.electron.onAgentEvent((event: any) => {
       if (event.type === 'done') {
         setIsTyping(false);
         setStatusText(null);
         setPermissionQueue([]);
+        setQuestionQueue([]);
         refreshGitRef.current?.();
         if (event.history) {
           setHistory(event.history);
@@ -242,6 +253,12 @@ export default function App() {
                   sessionSnapshotRef.current.sessionId = id;
                   setCurrentSessionId(id);
                 }
+                // Sidebar list only reflects persisted sessions — refresh it now
+                // so a new/updated conversation shows up without a reload or
+                // "New Chat" click. Safe even if a newer session was already
+                // adopted (epoch mismatch above): the list still needs the
+                // just-written row either way.
+                window.electron?.listSessions?.().then((list: any) => setSessionList(list ?? []));
               })
               .catch(() => { /* persistence must never break the UI */ });
           }
@@ -280,6 +297,10 @@ export default function App() {
         setPermissionQueue(prev => [...prev, event]);
         return;
       }
+      if (event.type === 'question') {
+        setQuestionQueue(prev => [...prev, event]);
+        return;
+      }
       if (event.type === 'status') {
         setStatusText(event.content);
         return;
@@ -305,14 +326,18 @@ export default function App() {
           if (lastMsg && lastMsg.role === 'assistant') {
             newMsgs[lastIdx] = { ...lastMsg, content: lastMsg.content + event.content };
           } else {
-            newMsgs.push({ id: Date.now().toString(), role: 'assistant', content: event.content });
+            newMsgs.push({ id: nextMsgId(), role: 'assistant', content: event.content });
           }
         } else if (event.type === 'tool_call') {
           if (event.name === 'skill') {
             try {
               const { skill_id } = JSON.parse(event.arguments ?? '{}');
-              if (skill_id) setInvokedSkills((prev) => (prev.includes(skill_id) ? prev : [...prev, skill_id]));
-            } catch { /* unparseable arguments — skip badge update */ }
+              if (typeof skill_id === 'string' && skill_id) {
+                setInvokedSkills((prev) => (prev.includes(skill_id) ? prev : [...prev, skill_id]));
+              }
+            } catch (e) {
+              console.warn('[moon] skill tool arguments unparseable', e); // skip badge update
+            }
           }
           // Keep messages in generation order: once an assistant message has
           // text, later tool calls start a NEW message so text → widget → text
@@ -320,7 +345,7 @@ export default function App() {
           if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content === '') {
             newMsgs[lastIdx] = { ...lastMsg, toolCalls: [...(lastMsg.toolCalls || []), event] };
           } else {
-            newMsgs.push({ id: Date.now().toString(), role: 'assistant', content: '', toolCalls: [event] });
+            newMsgs.push({ id: nextMsgId(), role: 'assistant', content: '', toolCalls: [event] });
           }
         } else if (event.type === 'tool_result') {
           if (lastMsg && lastMsg.toolCalls) {
@@ -339,11 +364,12 @@ export default function App() {
               toolCalls: lastMsg.toolCalls.map((c: any) => c.result ? c : { ...c, result: 'aborted' }),
             };
           }
-          newMsgs.push({ id: Date.now().toString(), role: 'assistant', content: `Error: ${event.content}` });
+          newMsgs.push({ id: nextMsgId(), role: 'assistant', content: `Error: ${event.content}` });
         }
         return newMsgs;
       });
     });
+    return unsubscribe;
   }, []);
 
   useEffect(() => {
@@ -504,7 +530,7 @@ export default function App() {
     if (trimmed.startsWith('#')) { setInput(''); quickAddMemory(trimmed); return; }
     if (!input.trim() || !workspace || !activeProfile?.hasKey) return;
 
-    const newMsg: ChatMessage = { id: Date.now().toString(), role: 'user', content: input };
+    const newMsg: ChatMessage = { id: nextMsgId(), role: 'user', content: input };
     setMessages(prev => [...prev, newMsg]);
     setInput('');
     setIsTyping(true);
@@ -520,7 +546,7 @@ export default function App() {
   /* ---- Skills handlers ---- */
   const handleSendWithSkillContent = (userPrompt: string, skillContent: string) => {
     if (!workspace || !activeProfile?.hasKey) return;
-    const newMsg: ChatMessage = { id: Date.now().toString(), role: 'user', content: userPrompt };
+    const newMsg: ChatMessage = { id: nextMsgId(), role: 'user', content: userPrompt };
     setMessages(prev => [...prev, newMsg]);
     setInput('');
     setIsTyping(true);
@@ -648,7 +674,7 @@ export default function App() {
 
   /* ---- Slash commands ---- */
   const appendLocalNote = (content: string) => {
-    setMessages((prev) => [...prev, { id: Date.now().toString(), role: 'assistant', content }]);
+    setMessages((prev) => [...prev, { id: nextMsgId(), role: 'assistant', content }]);
   };
 
   const compactNow = async () => {
@@ -791,6 +817,13 @@ export default function App() {
     setPermissionQueue(prev => prev.slice(1));
   };
 
+  const respondQuestion = (answer: string | null) => {
+    const req = questionQueue[0];
+    if (!req) return;
+    window.electron?.respondQuestion(req.id, answer);
+    setQuestionQueue(prev => prev.slice(1));
+  };
+
   const inputDisabled = !workspace || isTyping || !activeProfile?.hasKey;
   const inputPlaceholder = !workspace
     ? 'Select a workspace to get started...'
@@ -846,7 +879,8 @@ export default function App() {
             </div>
           ) : (
             messages.map((msg, i) => (
-              <div key={i} className="msg-row">
+              // Sessions saved before messages carried ids fall back to index.
+              <div key={msg.id ?? i} className="msg-row">
                 {msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0 && (
                   <div className="activity-block">
                     {msg.toolCalls.map((tool: any, j: number) => tool.name === 'render_ui'
@@ -870,7 +904,10 @@ export default function App() {
           {permissionQueue.length > 0 && (
             <PermissionRequest req={permissionQueue[0]} onRespond={respondPermission} />
           )}
-          {isTyping && permissionQueue.length === 0 && <StatusIndicator text={statusText} />}
+          {permissionQueue.length === 0 && questionQueue.length > 0 && (
+            <QuestionPrompt req={questionQueue[0]} onAnswer={respondQuestion} />
+          )}
+          {isTyping && permissionQueue.length === 0 && questionQueue.length === 0 && <StatusIndicator text={statusText} />}
           <div ref={chatEndRef} />
         </div>
 
@@ -927,47 +964,55 @@ export default function App() {
       )}
 
       <OverlayModal open={activeModal === 'skills'} onClose={() => setActiveModal(null)} wide>
-        <SkillsPanel
-          discoveredSkills={discoveredSkills}
-          invokedSkillIds={invokedSkills}
-          onInvokeSkill={(id: string) => { invokeSkillById(id); setActiveModal(null); }}
-          onCreateSkill={handleCreateSkill}
-          onInstallSkill={handleInstallSkill}
-          onInstallMarketplaceSkill={handleInstallMarketplaceSkill}
-          onInstallSkillFromUrl={handleInstallSkillFromUrl}
-          skillInstallKey={skillInstallKey}
-        />
+        <React.Suspense fallback={null}>
+          <SkillsPanel
+            discoveredSkills={discoveredSkills}
+            invokedSkillIds={invokedSkills}
+            onInvokeSkill={(id: string) => { invokeSkillById(id); setActiveModal(null); }}
+            onCreateSkill={handleCreateSkill}
+            onInstallSkill={handleInstallSkill}
+            onInstallMarketplaceSkill={handleInstallMarketplaceSkill}
+            onInstallSkillFromUrl={handleInstallSkillFromUrl}
+            skillInstallKey={skillInstallKey}
+          />
+        </React.Suspense>
       </OverlayModal>
 
       <OverlayModal open={activeModal === 'mcp'} onClose={() => setActiveModal(null)} wide>
-        <McpPanel
-          servers={mcpData.servers}
-          statuses={mcpData.statuses}
-          busy={isTyping}
-          onConnect={(id: string) => window.electron?.connectMcp(id).then(setMcpData)}
-          onDisconnect={(id: string) => window.electron?.disconnectMcp(id).then(setMcpData)}
-          onSaveServer={(def: any, secrets: any) => window.electron?.upsertMcpServer(def, secrets).then(setMcpData)}
-          onDelete={(id: string) => window.electron?.deleteMcpServer(id).then(setMcpData)}
-          onAddPreset={handleAddMcpPreset}
-        />
+        <React.Suspense fallback={null}>
+          <McpPanel
+            servers={mcpData.servers}
+            statuses={mcpData.statuses}
+            busy={isTyping}
+            onConnect={(id: string) => window.electron?.connectMcp(id).then(setMcpData)}
+            onDisconnect={(id: string) => window.electron?.disconnectMcp(id).then(setMcpData)}
+            onSaveServer={(def: any, secrets: any) => window.electron?.upsertMcpServer(def, secrets).then(setMcpData)}
+            onDelete={(id: string) => window.electron?.deleteMcpServer(id).then(setMcpData)}
+            onAddPreset={handleAddMcpPreset}
+          />
+        </React.Suspense>
       </OverlayModal>
 
       <OverlayModal open={activeModal === 'settings'} onClose={() => setActiveModal(null)}>
-        <SettingsPanel
-          config={config}
-          onSetActiveProfile={(id: string) => window.electron?.setActiveProfile(id).then(setConfig)}
-          onSaveProfile={(profile: any, apiKey?: string) => window.electron?.upsertProfile(profile, apiKey).then(setConfig)}
-          onDeleteProfile={(id: string) => window.electron?.deleteProfile(id).then(setConfig)}
-        />
+        <React.Suspense fallback={null}>
+          <SettingsPanel
+            config={config}
+            onSetActiveProfile={(id: string) => window.electron?.setActiveProfile(id).then(setConfig)}
+            onSaveProfile={(profile: any, apiKey?: string) => window.electron?.upsertProfile(profile, apiKey).then(setConfig)}
+            onDeleteProfile={(id: string) => window.electron?.deleteProfile(id).then(setConfig)}
+          />
+        </React.Suspense>
       </OverlayModal>
 
       <OverlayModal open={activeModal === 'usage'} onClose={() => setActiveModal(null)}>
-        <UsagePanel
-          sessionUsage={sessionUsage}
-          contextInfo={displayContext}
-          activeProfile={activeProfile}
-          activeLimits={activeLimits}
-        />
+        <React.Suspense fallback={null}>
+          <UsagePanel
+            sessionUsage={sessionUsage}
+            contextInfo={displayContext}
+            activeProfile={activeProfile}
+            activeLimits={activeLimits}
+          />
+        </React.Suspense>
       </OverlayModal>
     </div>
   );

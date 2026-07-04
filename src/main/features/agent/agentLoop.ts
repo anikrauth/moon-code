@@ -15,6 +15,8 @@ import { loadMemory, buildSystemPrompt } from './systemPrompt';
 // runAgentLoop from this file — both sides only reference the other inside
 // callbacks invoked after module load, so this resolves fine at runtime.
 import { makeTools } from './toolRouter';
+import { ensureScratchDir } from '../workspace/scratchDir';
+import { ensurePlansDir } from '../workspace/plansDir';
 
 const MAX_STEPS = 50;
 
@@ -116,17 +118,20 @@ export async function handlePrompt(
     skillsText?: string,
     usageHint?: { lastInputTokens?: number; skillContent?: string },
     skillsCatalog?: { id: string; description: string; content: string }[],
+    requestQuestion?: (question: string, options: { label: string; description?: string }[], agentId: string) => Promise<string>,
 ) {
     try {
         const limits = resolveLimits(settings?.model, settings);
         history = await compactHistory(history, settings, onEvent, abortSignal, false, limits, usageHint?.lastInputTokens);
 
         const { global: globalMemory, project: projectMemory, catalog: memoryCatalog } = loadMemory(workspace);
+        const scratchDir = ensureScratchDir(workspace);
+        const plansDir = ensurePlansDir(workspace);
 
-        const systemPrompt = buildSystemPrompt({ workspace, globalMemory, projectMemory, memoryCatalog, skillsText, usageHint });
+        const systemPrompt = buildSystemPrompt({ workspace, scratchDir, plansDir, globalMemory, projectMemory, memoryCatalog, skillsText, usageHint });
 
         const tools = makeTools({
-            workspace, onEvent, requestPermission, agentId: 'main',
+            workspace, onEvent, requestPermission, requestQuestion, agentId: 'main',
             includeSpawn: true, settings,
             spawnState: { counter: 0, projectMemory, globalMemory, memoryCatalog, skillsText: skillsText ?? '', skillsCatalog: skillsCatalog ?? [] },
             abortSignal, extraTools, limits, skillsCatalog: skillsCatalog ?? [],

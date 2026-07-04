@@ -1,7 +1,7 @@
 {
   "name": "moon-code",
-  "version": "1.0.04",
-  "description": "",
+  "version": "1.0.5",
+  "description": "Moon Code — AI coding agent desktop app",
   "main": "dist/main/main.js",
   "scripts": {
     "dev:vite": "vite",
@@ -9,7 +9,8 @@
     "dev": "concurrently \"npm run dev:vite\" \"npm run dev:electron\"",
     "build": "vite build && tsc -p tsconfig.main.json && electron-builder",
     "build:main": "tsc -p tsconfig.main.json",
-    "test": "npm run build:main && node --test test/*.test.js"
+    "test": "npm run build:main && node --test test/*.test.js",
+    "lint": "tsc --noEmit"
   },
   "keywords": [],
   "author": "",
@@ -28,6 +29,7 @@
     "react-dom": "^19.2.7",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
+    "unist-util-visit": "^5.1.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
