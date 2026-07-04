@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { app, BrowserWindow, ipcMain, dialog, safeStorage } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, safeStorage, shell } from 'electron';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -7,8 +7,11 @@ import { handlePrompt, forceCompact } from './agent';
 import { createConfigStore } from './configStore';
 import { createSessionStore } from './sessionStore';
 import { createMcpManager } from './mcpManager';
-import { SKILL_CATALOG } from '../shared/skillCatalog';
-import { scanSkills } from './skillScanner';
+import { scanSkills, buildInvocableCatalog } from './skillScanner';
+import { installSkillPackage } from './skillInstaller';
+import { memoryStore } from './memoryStore';
+import { initWorkspace } from './workspaceInit';
+import { createGitService } from './gitService';
 
 app.name = 'Moon Code';
 
@@ -18,8 +21,10 @@ const appIconPath = path.join(__dirname, '../../build/icon.png');
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1000,
-    height: 800,
+    width: 1400,
+    height: 900,
+    minWidth: 1100,
+    minHeight: 640,
     titleBarStyle: 'hiddenInset',
     icon: appIconPath,
     webPreferences: {
@@ -80,7 +85,6 @@ app.whenReady().then(() => {
   ipcMain.handle('config:upsertProfile', configHandler((profile, rawApiKey) => configStore.upsertProfile(profile, rawApiKey)));
   ipcMain.handle('config:deleteProfile', configHandler((id) => configStore.deleteProfile(id)));
   ipcMain.handle('config:setActiveProfile', configHandler((id) => configStore.setActiveProfile(id)));
-  ipcMain.handle('config:setSkillIds', configHandler((ids) => configStore.setSkillIds(ids)));
   ipcMain.handle('config:setMcpIds', configHandler((ids) => configStore.setMcpIds(ids)));
 
   ipcMain.handle('skills:discover', (_e, workspace: string) => {
@@ -156,6 +160,14 @@ app.whenReady().then(() => {
       }
       throw new Error(`Unsupported marketplace source: ${entry.source}`);
     } catch (e: any) { console.error('[skills]', e); return { success: false, error: e.message }; }
+  });
+
+  ipcMain.handle('skills:installPackage', async (_e, spec: string, workspace: string) => {
+    // Non-interactive `npx skills add` into ~/.agents/skills (shared ecosystem
+    // store). Same helper the agent's install_skill tool uses.
+    const result = await installSkillPackage(spec, workspace);
+    if (!result.success) return { success: false, error: result.error };
+    return { success: true, skill: result.skill ?? null };
   });
 
   ipcMain.handle('skills:installFromUrl', async (_e, url: string, workspace: string) => {
@@ -261,6 +273,44 @@ app.whenReady().then(() => {
     return sessionStore.listSessions();
   });
 
+  ipcMain.handle('workspace:init', (_event, workspace: string) => {
+    try { return initWorkspace(workspace); }
+    catch (e) { console.error('[workspace]', e); return { created: false, sources: [] }; }
+  });
+
+  const gitService = createGitService();
+  ipcMain.handle('git:snapshot', async (_event, workspace: string) => {
+    try { return await gitService.snapshot(workspace); }
+    catch (e) { console.error('[git]', e); return { gitAvailable: true, isRepo: false }; }
+  });
+  ipcMain.handle('git:checkout', async (_event, workspace: string, branch: string) => {
+    try { return await gitService.checkout(workspace, branch); }
+    catch (e: any) { console.error('[git]', e); return { ok: false, error: e?.message ?? String(e) }; }
+  });
+  ipcMain.handle('git:commit', async (_event, workspace: string, message: string) => {
+    try { return await gitService.commit(workspace, message); }
+    catch (e: any) { console.error('[git]', e); return { ok: false, error: e?.message ?? String(e) }; }
+  });
+
+  ipcMain.handle('memory:append', (_event, scope: 'project' | 'global', text: string, workspace: string) => {
+    try { memoryStore.appendInstruction(scope, workspace, text); return { ok: true }; }
+    catch (e: any) { console.error('[memory]', e); return { ok: false, error: e.message }; }
+  });
+  ipcMain.handle('memory:list', (_event, workspace: string) => {
+    try { return memoryStore.buildMemoryCatalog(workspace); } catch (e) { console.error('[memory]', e); return []; }
+  });
+  ipcMain.handle('memory:open', async (_event, scope: 'project' | 'global', workspace: string) => {
+    try {
+      const file = memoryStore.instructionPath(scope, workspace);
+      if (!fs.existsSync(file)) {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, scope === 'global' ? '# Moon — global instructions\n' : '# Moon — project instructions\n', 'utf-8');
+      }
+      const err = await shell.openPath(file);
+      return err ? { ok: false, error: err } : { ok: true };
+    } catch (e: any) { console.error('[memory]', e); return { ok: false, error: e.message }; }
+  });
+
   // Tools the user approved with "always allow" for the rest of this app session.
   const sessionAllowedTools = new Set<string>();
   const pendingPermissions = new Map<string, (allow: boolean, alwaysAllow: boolean) => void>();
@@ -295,22 +345,7 @@ app.whenReady().then(() => {
         event.reply('agent:event', { type: 'permission_request', id, name, arguments: args, agent: agentId });
       });
     };
-    const activeSkills = configStore.getConfig().activeSkillIds
-        .map((sid) => SKILL_CATALOG.find((s) => s.id === sid))
-        .filter(Boolean);
-    const bundledSkillsText = activeSkills.length
-        ? 'ACTIVE SKILLS — follow these working practices:\n\n' + activeSkills.map((s) => `${s.name}:\n${s.instructions}`).join('\n\n')
-        : '';
-    const discovered = scanSkills(workspace);
-    const invocableSkills = discovered.filter((s) => !s.disableModelInvocation);
-    // Progressive disclosure (Claude Code / Codex style): the model only sees
-    // id + description up front. Full instructions are loaded on demand via
-    // the `skill` tool (see agent.ts), not inlined into the prompt.
-    const catalogText = invocableSkills.length
-        ? 'AVAILABLE SKILLS — call the `skill` tool with the id to load full instructions before starting matching work:\n' + invocableSkills.map((s) => `- ${s.id}: ${s.description}`).join('\n')
-        : '';
-    const skillsText = [bundledSkillsText, catalogText].filter(Boolean).join('\n\n');
-    const skillsCatalog = invocableSkills.map((s) => ({ id: s.id, description: s.description, content: s.content }));
+    const { skillsText, skillsCatalog } = buildInvocableCatalog(workspace);
     handlePrompt(prompt, workspace, settings, history, (agentEvent) => {
       event.reply('agent:event', agentEvent);
     }, requestPermission, activeTurn.signal, mcpManager.getAgentTools(), skillsText, meta, skillsCatalog);

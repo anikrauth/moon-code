@@ -1,0 +1,148 @@
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { execFileSync } = require('child_process');
+const { createGitService } = require('../dist/main/gitService.js');
+
+const git = createGitService();
+
+function tmpDir(tag) {
+  return fs.mkdtempSync(path.join(os.tmpdir(), `moon-git-${tag}-`));
+}
+
+function initRepo(dir) {
+  execFileSync('git', ['init', '-q'], { cwd: dir });
+  execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+  execFileSync('git', ['config', 'commit.gpgsign', 'false'], { cwd: dir });
+}
+
+function commitAll(dir, msg) {
+  execFileSync('git', ['add', '-A'], { cwd: dir });
+  execFileSync('git', ['commit', '-q', '-m', msg], { cwd: dir });
+}
+
+test('not-a-repo directory reports isRepo false', async () => {
+  const dir = tmpDir('norepo');
+  const snap = await git.snapshot(dir);
+  assert.strictEqual(snap.gitAvailable, true);
+  assert.strictEqual(snap.isRepo, false);
+});
+
+test('git binary missing reports gitAvailable false', async () => {
+  const fakeGit = createGitService({
+    execFileImpl: (_cmd, _args, _opts, cb) => {
+      const err = new Error('spawn git ENOENT');
+      err.code = 'ENOENT';
+      cb(err, '', '');
+    },
+  });
+  const snap = await fakeGit.snapshot('/whatever');
+  assert.deepStrictEqual(snap, { gitAvailable: false });
+});
+
+test('empty repo (no commits) surfaces untracked files with line counts', async () => {
+  const dir = tmpDir('empty');
+  initRepo(dir);
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'one\ntwo\nthree\n');
+  const snap = await git.snapshot(dir);
+  assert.strictEqual(snap.isRepo, true);
+  const f = snap.files.find((x) => x.path === 'a.txt');
+  assert.ok(f, 'a.txt should be listed');
+  assert.strictEqual(f.status, 'untracked');
+  assert.strictEqual(f.adds, 3);
+  assert.strictEqual(f.dels, 0);
+});
+
+test('modified tracked file yields numstat adds/dels', async () => {
+  const dir = tmpDir('mod');
+  initRepo(dir);
+  fs.writeFileSync(path.join(dir, 'f.txt'), 'a\nb\nc\n');
+  commitAll(dir, 'init');
+  fs.writeFileSync(path.join(dir, 'f.txt'), 'a\nB\nc\nd\n');
+  const snap = await git.snapshot(dir);
+  const f = snap.files.find((x) => x.path === 'f.txt');
+  assert.strictEqual(f.status, 'modified');
+  assert.strictEqual(f.adds, 2);
+  assert.strictEqual(f.dels, 1);
+  assert.strictEqual(snap.totals.adds, 2);
+  assert.strictEqual(snap.totals.dels, 1);
+  assert.strictEqual(snap.totals.fileCount, 1);
+});
+
+test('branch and branches reflect current checkout', async () => {
+  const dir = tmpDir('branch');
+  initRepo(dir);
+  fs.writeFileSync(path.join(dir, 'f.txt'), 'x\n');
+  commitAll(dir, 'init');
+  execFileSync('git', ['branch', 'feature'], { cwd: dir });
+  const snap = await git.snapshot(dir);
+  assert.ok(snap.branches.includes('feature'));
+  assert.ok(['main', 'master'].includes(snap.branch));
+});
+
+test('binary file numstat marks binary with zero counts', async () => {
+  const dir = tmpDir('bin');
+  initRepo(dir);
+  fs.writeFileSync(path.join(dir, 'b.bin'), Buffer.from([0, 1, 2, 3]));
+  commitAll(dir, 'init');
+  fs.writeFileSync(path.join(dir, 'b.bin'), Buffer.from([0, 1, 2, 3, 4, 5, 6]));
+  const snap = await git.snapshot(dir);
+  const f = snap.files.find((x) => x.path === 'b.bin');
+  assert.strictEqual(f.binary, true);
+  assert.strictEqual(f.adds, 0);
+  assert.strictEqual(f.dels, 0);
+});
+
+test('checkout switches branch', async () => {
+  const dir = tmpDir('checkout');
+  initRepo(dir);
+  fs.writeFileSync(path.join(dir, 'f.txt'), 'x\n');
+  commitAll(dir, 'init');
+  execFileSync('git', ['branch', 'dev'], { cwd: dir });
+  const res = await git.checkout(dir, 'dev');
+  assert.strictEqual(res.ok, true);
+  const snap = await git.snapshot(dir);
+  assert.strictEqual(snap.branch, 'dev');
+});
+
+test('checkout rejects invalid branch name', async () => {
+  const dir = tmpDir('badbranch');
+  initRepo(dir);
+  const res = await git.checkout(dir, '--evil');
+  assert.strictEqual(res.ok, false);
+  assert.match(res.error, /Invalid/);
+});
+
+test('checkout of missing branch surfaces error', async () => {
+  const dir = tmpDir('nobranch');
+  initRepo(dir);
+  fs.writeFileSync(path.join(dir, 'f.txt'), 'x\n');
+  commitAll(dir, 'init');
+  const res = await git.checkout(dir, 'does-not-exist');
+  assert.strictEqual(res.ok, false);
+  assert.ok(res.error && res.error.length > 0);
+});
+
+test('commit stages all and returns short hash; then tree is clean', async () => {
+  const dir = tmpDir('commit');
+  initRepo(dir);
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'hello\n');
+  const res = await git.commit(dir, 'first commit');
+  assert.strictEqual(res.ok, true);
+  assert.match(res.hash, /^[0-9a-f]{7,}$/);
+  const snap = await git.snapshot(dir);
+  assert.strictEqual(snap.files.length, 0);
+  assert.strictEqual(snap.totals.fileCount, 0);
+});
+
+test('commit with empty message is rejected', async () => {
+  const dir = tmpDir('emptymsg');
+  initRepo(dir);
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'x\n');
+  const res = await git.commit(dir, '   ');
+  assert.strictEqual(res.ok, false);
+  assert.match(res.error, /message/i);
+});

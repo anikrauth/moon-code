@@ -4,7 +4,7 @@
 
 # ui-ux
 - Match Claude Code aesthetic: JetBrains Mono (400/500/600/700) with ligatures, -0.01em letter-spacing, 13px base font. Confidence: 0.70
-- Use accent color #d77757 (Claude Code orange). Confidence: 0.70
+- Use accent color #2D6FCD (brand cobalt blue, replacing prior Claude Code orange #d77757). Confidence: 0.90
 - Use tight radius scale: --radius-lg: 6px, --radius-md: 4px, --radius-sm: 2px. Confidence: 0.70
 - Implement VS Code-style right sidebar with icon rail and content panel. Confidence: 0.70
 - Keep the Sessions panel open by default on app launch. Confidence: 0.85
