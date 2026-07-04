@@ -165,7 +165,7 @@ export default function McpPanel({ servers, statuses, busy, onConnect, onDisconn
           <div style={{ display: 'flex', gap: '8px' }}>
             <button className="glass-panel" style={{ padding: '8px', cursor: 'pointer', color: 'var(--text-primary)', flexGrow: 1 }} onClick={() => setForm(null)}>Cancel</button>
             <button
-              style={{ background: 'var(--accent-color)', color: '#000', border: 'none', borderRadius: 'var(--radius-md)', padding: '8px', cursor: 'pointer', fontWeight: 600, flexGrow: 1 }}
+              style={{ background: 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: 'var(--radius-md)', padding: '8px', cursor: 'pointer', fontWeight: 600, flexGrow: 1 }}
               disabled={!form.name.trim() || (form.transport === 'stdio' ? !form.command.trim() : !form.url.trim())}
               onClick={submitForm}
             >
@@ -177,7 +177,7 @@ export default function McpPanel({ servers, statuses, busy, onConnect, onDisconn
 
       <button
         onClick={() => !busy && setForm(emptyForm())}
-        style={{ margin: '12px', background: 'var(--accent-color)', color: '#000', border: 'none', borderRadius: 'var(--radius-md)', padding: '10px', cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+        style={{ margin: '12px', background: 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: 'var(--radius-md)', padding: '10px', cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
       >
         <Plus size={14} /> Add Server
       </button>

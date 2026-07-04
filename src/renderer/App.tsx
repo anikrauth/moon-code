@@ -1,13 +1,22 @@
 // @ts-nocheck
 import React, { useState, useEffect, useRef } from 'react';
-import { FolderOpen, Plus } from 'lucide-react';
-import RichInput, { SkillItem } from './RichInput';
-import Sidebar from './Sidebar';
-import { SKILL_CATALOG } from '../shared/skillCatalog';
+import RichInput from './RichInput';
+import TaskSidebar from './TaskSidebar';
+import TopBar from './TopBar';
+import RightPanel from './RightPanel';
+import OverlayModal from './OverlayModal';
+import { ToolChip, TurnSummaryCard } from './ToolChips';
+import SkillsPanel from './SkillsPanel';
+import McpPanel from './McpPanel';
+import SettingsPanel from './SettingsPanel';
+import UsagePanel from './UsagePanel';
 import { resolveLimits } from '../shared/modelLimits';
 import { JSONUIProvider, Renderer } from '@json-render/react';
 import { registry } from './uiRegistry';
 import { parseAssistantContent } from './parseAssistantContent';
+import { parseRenderUiSpec } from '../shared/renderUiSpec';
+import Markdown from './Markdown';
+import PermissionRequest from './PermissionRequest';
 
 /* Renderer throws on specs that pass validation but fail at render time;
    without a boundary React unmounts the whole app. Fall back to raw text. */
@@ -21,60 +30,45 @@ class SpecErrorBoundary extends React.Component<{ fallback: React.ReactNode; chi
   }
 }
 
-/* While a response streams in, the accumulated JSONL is usually not yet a valid
-   spec — render the last spec that parsed instead of flashing raw JSON. */
+/* Assistant answers are markdown; structured UI arrives via the render_ui
+   tool (UiWidgetBlock). The spec branch here only serves sessions persisted
+   before that change, whose message content is raw SpecStream JSONL — those
+   are settled (never streaming), so no partial-spec handling is needed. */
 function AssistantContent({ content, streaming }: { content: string; streaming: boolean }) {
-  const lastGoodSpec = useRef<any>(null);
-  const spec = parseAssistantContent(content);
-  if (spec) lastGoodSpec.current = spec;
-  const displaySpec = spec ?? (streaming ? lastGoodSpec.current : null);
-
-  if (displaySpec) {
-    return (
-      <SpecErrorBoundary fallback={content}>
-        <JSONUIProvider
-          key={JSON.stringify(displaySpec.state ?? null)}
-          registry={registry}
-          initialState={displaySpec.state ?? {}}
-        >
-          <Renderer spec={displaySpec} registry={registry} />
-        </JSONUIProvider>
-      </SpecErrorBoundary>
-    );
+  if (!streaming && content.trimStart().startsWith('{')) {
+    const spec = parseAssistantContent(content);
+    if (spec) {
+      return (
+        <SpecErrorBoundary fallback={<Markdown>{content}</Markdown>}>
+          <JSONUIProvider registry={registry} initialState={spec.state ?? {}}>
+            <Renderer spec={spec} registry={registry} />
+          </JSONUIProvider>
+        </SpecErrorBoundary>
+      );
+    }
   }
-  if (streaming) return <span>&hellip;</span>;
-  return <>{content}</>;
+  return <Markdown streaming={streaming}>{content}</Markdown>;
 }
 
-function ToolActivity({ tool }: { tool: any }) {
-  const [expanded, setExpanded] = useState(false);
-  let preview = '';
-  try {
-    const args = JSON.parse(tool.arguments ?? '{}');
-    preview = args.command ?? args.filePath ?? args.dirPath ?? args.task ?? args.pattern ?? args.skill_id ?? '';
-  } catch {
-    // unparseable arguments — show no preview
-  }
-  if (preview.length > 60) preview = `${preview.slice(0, 60)}…`;
-  const result = tool.result;
-  const hasResult = tool.result != null;
-  const isError = hasResult && (result.startsWith('Error:') || result === 'User denied permission for this action.' || result === 'aborted');
-  const summary = hasResult ? ((result.split('\n').find((l: string) => l.trim()) ?? '').slice(0, 80) || '(no output)') : null;
+/* render_ui tool calls render as an inline widget card instead of a collapsed
+   activity row. Invalid specs (the model gets an error result and retries)
+   fall back to the activity row so the user sees the error, not a broken card. */
+function UiWidgetBlock({ tool }: { tool: any }) {
+  const parsed = React.useMemo(() => {
+    try {
+      return parseRenderUiSpec(JSON.parse(tool.arguments ?? '{}').spec ?? '');
+    } catch {
+      return { ok: false, error: 'unparseable arguments' };
+    }
+  }, [tool.arguments]);
+  if (!parsed.ok) return <ToolChip tool={tool} />;
   return (
-    <div className="activity-item">
-      <div
-        className={`activity-line ${hasResult ? 'activity-clickable' : ''}`}
-        onClick={() => hasResult && setExpanded((e) => !e)}
-        title={hasResult ? (expanded ? 'Collapse output' : 'Expand output') : undefined}
-      >
-        <span className={`activity-marker ${hasResult ? '' : 'activity-pending'}`}>⏺</span>
-        {tool.agent && tool.agent !== 'main' && <span className="agent-badge">{tool.agent}</span>}
-        <span className="activity-label"><strong>{tool.name}</strong>{preview ? `(${preview})` : ''}</span>
-      </div>
-      {summary != null && !expanded && (
-        <div className={`activity-result-summary ${isError ? 'activity-error' : ''}`}>⎿ {summary}</div>
-      )}
-      {expanded && hasResult && <pre className="activity-result-full">{result}</pre>}
+    <div className="ui-widget-card">
+      <SpecErrorBoundary fallback={<pre className="md-pre">{tool.arguments}</pre>}>
+        <JSONUIProvider registry={registry} initialState={parsed.spec.state ?? {}}>
+          <Renderer spec={parsed.spec} registry={registry} />
+        </JSONUIProvider>
+      </SpecErrorBoundary>
     </div>
   );
 }
@@ -101,14 +95,38 @@ export default function App() {
   const [statusText, setStatusText] = useState<string | null>(null);
   const [config, setConfig] = useState<any>(null);
 
-  /* ---- Sidebar state ---- */
-  const [sidebarTab, setSidebarTab] = useState<string | null>('sessions');
+  /* ---- Overlay-modal state (Skills/MCP/Settings/Usage) ---- */
+  const [activeModal, setActiveModal] = useState<string | null>(null);
   const [skillInstallKey, setSkillInstallKey] = useState(0);
+
+  /* ---- Right-panel state (git + goal + progress) ---- */
+  const [rightPanelOpen, setRightPanelOpen] = useState<boolean>(() => {
+    try { return localStorage.getItem('moon-right-panel') !== '0'; } catch { return true; }
+  });
+  const toggleRightPanel = () => setRightPanelOpen((o) => {
+    const next = !o;
+    try { localStorage.setItem('moon-right-panel', next ? '1' : '0'); } catch { /* ignore */ }
+    return next;
+  });
+  const [gitSnapshot, setGitSnapshot] = useState<any>(null);
+  const [gitLoading, setGitLoading] = useState(false);
+  const [currentCreatedAt, setCurrentCreatedAt] = useState<number>(() => Date.now());
+
+  /* Progress (from the set_progress tool). Ref-mirrored because the `done`
+     save handler runs in the once-registered listener and must read it
+     synchronously, same pattern as sessionUsageRef. */
+  const [progress, setProgress] = useState<any>(null);
+  const progressRef = useRef<any>(null);
+  const setProgressBoth = (p: any) => { progressRef.current = p; setProgress(p); };
+  // Stable handle to refreshGit so the once-registered agent-event listener can
+  // call the latest version without re-registering.
+  const refreshGitRef = useRef<() => void>(() => {});
 
   function StatusIndicator({ text }: { text: string | null }) {
     const verbs = ['Thinking', 'Pondering', 'Simmering', 'Cogitating', 'Synthesizing'];
     const [verb, setVerb] = useState(verbs[0]);
     const [frame, setFrame] = useState(0);
+    const [seconds, setSeconds] = useState(0);
 
     useEffect(() => {
       setVerb(verbs[Math.floor(Math.random() * verbs.length)]);
@@ -118,7 +136,10 @@ export default function App() {
       const sTimer = setInterval(() => {
         setFrame((f) => (f + 1) % 10);
       }, 100);
-      return () => { clearInterval(vTimer); clearInterval(sTimer); };
+      const tTimer = setInterval(() => {
+        setSeconds((s) => s + 1);
+      }, 1000);
+      return () => { clearInterval(vTimer); clearInterval(sTimer); clearInterval(tTimer); };
     }, []);
 
     const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'][frame];
@@ -128,13 +149,12 @@ export default function App() {
       <div className="status-indicator">
         <span className="status-spinner">{spinner}</span>
         <span className="status-label">{label}</span>
-        <span className="status-esc">esc to interrupt</span>
+        <span className="status-esc">({seconds}s · esc to interrupt)</span>
       </div>
     );
   }
 
   /* ---- Skills state ---- */
-  const [activeSkills, setActiveSkills] = useState<SkillItem[]>([]);
   const [discoveredSkills, setDiscoveredSkills] = useState<any[]>([]);
   const [invokedSkills, setInvokedSkills] = useState<string[]>([]);
 
@@ -161,12 +181,6 @@ export default function App() {
 
   const applyConfig = (c: any) => {
     setConfig(c);
-    setActiveSkills(
-      c.activeSkillIds
-        .map((id: string) => SKILL_CATALOG.find((s) => s.id === id))
-        .filter(Boolean)
-        .map((s: any) => ({ id: s.id, name: s.name, description: s.description }))
-    );
   };
 
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -198,6 +212,7 @@ export default function App() {
         setIsTyping(false);
         setStatusText(null);
         setPermissionQueue([]);
+        refreshGitRef.current?.();
         if (event.history) {
           setHistory(event.history);
           const snap = sessionSnapshotRef.current;
@@ -210,6 +225,7 @@ export default function App() {
               messages: snap.messages,
               history: event.history,
               usage: { context: contextInfoRef.current, session: sessionUsageRef.current },
+              progress: progressRef.current,
             };
             saveChainRef.current = saveChainRef.current
               .then(async () => {
@@ -268,6 +284,18 @@ export default function App() {
         setStatusText(event.content);
         return;
       }
+      if (event.type === 'progress') {
+        setProgressBoth({ goal: event.goal, steps: event.steps });
+        return;
+      }
+      if (event.type === 'skill_installed') {
+        // Listener is registered once ([] effect) so `workspace` is stale here;
+        // read the live value from the ref kept in sync by its own effect.
+        const ws = sessionSnapshotRef.current?.workspace;
+        if (ws) window.electron?.discoverSkills?.(ws).then((list: any) => setDiscoveredSkills(list ?? []));
+        if (event.id) setInvokedSkills((prev) => (prev.includes(event.id) ? prev : [...prev, event.id]));
+        return;
+      }
       setMessages(prev => {
         const newMsgs = [...prev];
         const lastIdx = newMsgs.length - 1;
@@ -286,7 +314,10 @@ export default function App() {
               if (skill_id) setInvokedSkills((prev) => (prev.includes(skill_id) ? prev : [...prev, skill_id]));
             } catch { /* unparseable arguments — skip badge update */ }
           }
-          if (lastMsg && lastMsg.role === 'assistant') {
+          // Keep messages in generation order: once an assistant message has
+          // text, later tool calls start a NEW message so text → widget → text
+          // renders chronologically (each message is [tools block][text]).
+          if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content === '') {
             newMsgs[lastIdx] = { ...lastMsg, toolCalls: [...(lastMsg.toolCalls || []), event] };
           } else {
             newMsgs.push({ id: Date.now().toString(), role: 'assistant', content: '', toolCalls: [event] });
@@ -297,7 +328,7 @@ export default function App() {
               c.name === event.name && (c.agent ?? 'main') === (event.agent ?? 'main') && !c.result);
             if (callIdx !== -1) {
               const toolCalls = [...lastMsg.toolCalls];
-              toolCalls[callIdx] = { ...toolCalls[callIdx], result: event.result };
+              toolCalls[callIdx] = { ...toolCalls[callIdx], result: event.result, ...(event.fileChange ? { fileChange: event.fileChange } : {}) };
               newMsgs[lastIdx] = { ...lastMsg, toolCalls };
             }
           }
@@ -361,15 +392,59 @@ export default function App() {
     window.electron?.discoverSkills?.(workspace).then((list: any) => setDiscoveredSkills(list ?? []));
   };
 
-  useEffect(() => {
-    refreshDiscoveredSkills();
-  }, [workspace]);
+  const refreshGit = () => {
+    const ws = sessionSnapshotRef.current?.workspace ?? workspace;
+    if (!ws) { setGitSnapshot(null); return; }
+    setGitLoading(true);
+    window.electron?.gitSnapshot?.(ws)
+      .then((snap: any) => setGitSnapshot(snap ?? null))
+      .catch(() => setGitSnapshot(null))
+      .finally(() => setGitLoading(false));
+  };
+  refreshGitRef.current = refreshGit;
+
+  const handleCommit = async (message: string) => {
+    if (!workspace) return { ok: false, error: 'No workspace.' };
+    const res = await window.electron?.gitCommit?.(workspace, message);
+    refreshGit();
+    return res ?? { ok: false, error: 'Commit failed.' };
+  };
+
+  const handleCheckout = async (branch: string) => {
+    if (!workspace) return;
+    const res = await window.electron?.gitCheckout?.(workspace, branch);
+    if (!res?.ok) appendLocalNote(`Branch switch failed: ${res?.error ?? 'unknown error'}`);
+    refreshGit();
+  };
 
   useEffect(() => {
-    if (sidebarTab === 'skills') refreshDiscoveredSkills();
-    if (sidebarTab === 'mcp') window.electron?.mcpList?.().then((d: any) => d && setMcpData(d));
-    if (sidebarTab === 'sessions') window.electron?.listSessions?.().then((list: any) => setSessionList(list ?? []));
-  }, [sidebarTab]);
+    refreshDiscoveredSkills();
+    refreshGit();
+  }, [workspace]);
+
+  // First open of a workspace: bootstrap .moon (memory index, skills dir) and
+  // seed MOON.md with @imports of any agent configs found (CLAUDE.md, ...).
+  useEffect(() => {
+    if (!workspace) return;
+    window.electron?.initWorkspace?.(workspace).then((res: any) => {
+      if (!res?.created) return;
+      const imported = res.sources?.length
+        ? ` — imported ${res.sources.length} agent config${res.sources.length === 1 ? '' : 's'} (${res.sources.join(', ')})`
+        : '';
+      appendLocalNote(`Initialized .moon workspace${imported}`);
+    });
+  }, [workspace]);
+
+  // Refresh backing data when a modal opens; keep the sidebar task list fresh.
+  useEffect(() => {
+    if (activeModal === 'skills') refreshDiscoveredSkills();
+    if (activeModal === 'mcp') window.electron?.mcpList?.().then((d: any) => d && setMcpData(d));
+  }, [activeModal]);
+
+  // When the right panel is opened, pull a fresh git snapshot.
+  useEffect(() => {
+    if (rightPanelOpen) refreshGit();
+  }, [rightPanelOpen]);
 
   const startNewChat = () => {
     sessionEpochRef.current += 1;
@@ -378,6 +453,9 @@ export default function App() {
     setCurrentSessionId(null);
     setSessionUsageBoth(EMPTY_SESSION_USAGE);
     setContextInfoBoth(null);
+    setProgressBoth(null);
+    setCurrentCreatedAt(Date.now());
+    window.electron?.listSessions?.().then((list: any) => setSessionList(list ?? []));
   };
 
   const selectWorkspace = async () => {
@@ -410,7 +488,20 @@ export default function App() {
     .filter((s: any) => mcpData.statuses[s.id]?.status === 'connected')
     .map((s: any) => ({ id: s.id, name: s.name, status: 'connected', tools: mcpData.statuses[s.id]?.toolCount }));
 
+  const quickAddMemory = async (raw: string) => {
+    const text = raw.replace(/^#+\s*/, '').trim();
+    if (!text) { appendLocalNote('Nothing to remember — type `# your note`.'); return; }
+    const global = window.confirm('Save to GLOBAL memory (all projects)?\n\nOK = global (~/.moon/MOON.md)\nCancel = this project (MOON.md)');
+    const scope = global ? 'global' : 'project';
+    if (scope === 'project' && !workspace) { appendLocalNote('Open a workspace to save project memory.'); return; }
+    const res = await window.electron?.appendMemory(scope, text, workspace);
+    if (res?.ok) appendLocalNote(`Remembered (${scope}): ${text}`);
+    else appendLocalNote(`Couldn't save memory${res?.error ? `: ${res.error}` : '.'}`);
+  };
+
   const handleSend = () => {
+    const trimmed = input.trim();
+    if (trimmed.startsWith('#')) { setInput(''); quickAddMemory(trimmed); return; }
     if (!input.trim() || !workspace || !activeProfile?.hasKey) return;
 
     const newMsg: ChatMessage = { id: Date.now().toString(), role: 'user', content: input };
@@ -427,17 +518,6 @@ export default function App() {
   };
 
   /* ---- Skills handlers ---- */
-  const handleToggleSkill = (skill: any) => {
-    setActiveSkills((prev) => {
-      const exists = prev.find((s) => s.id === skill.id);
-      const next = exists
-        ? prev.filter((s) => s.id !== skill.id)
-        : [...prev, { id: skill.id, name: skill.name, description: skill.description }];
-      window.electron?.setSkillIds(next.map((s) => s.id));
-      return next;
-    });
-  };
-
   const handleSendWithSkillContent = (userPrompt: string, skillContent: string) => {
     if (!workspace || !activeProfile?.hasKey) return;
     const newMsg: ChatMessage = { id: Date.now().toString(), role: 'user', content: userPrompt };
@@ -481,7 +561,7 @@ export default function App() {
     if (result?.success && result.skill) {
       appendLocalNote(`Skill "${result.skill.id}" created in ${scope === 'personal' ? '~/.moon/skills' : '.moon/skills'}.`);
       refreshDiscoveredSkills();
-      setSidebarTab('skills');
+      setActiveModal('skills');
       setSkillInstallKey((k) => k + 1);
     } else {
       appendLocalNote(`Failed to create skill: ${result?.error ?? 'unknown error'}`);
@@ -498,7 +578,7 @@ export default function App() {
     if (result?.success && result.skill) {
       appendLocalNote(`Skill "${result.skill.id}" installed in ${scope === 'personal' ? '~/.moon/skills' : '.moon/skills'}.`);
       refreshDiscoveredSkills();
-      setSidebarTab('skills');
+      setActiveModal('skills');
       setSkillInstallKey((k) => k + 1);
     } else {
       appendLocalNote(`Failed to install skill: ${result?.error ?? 'Select a SKILL.md file or a directory containing one.'}`);
@@ -511,7 +591,7 @@ export default function App() {
     if (result?.success && result.skill) {
       appendLocalNote(`Marketplace skill "${result.skill.id}" installed globally to ~/.moon/skills.`);
       refreshDiscoveredSkills();
-      setSidebarTab('skills');
+      setActiveModal('skills');
       setSkillInstallKey((k) => k + 1);
     } else {
       appendLocalNote(`Failed to install marketplace skill "${skillId}": ${result?.error ?? 'unknown error'}`);
@@ -525,7 +605,7 @@ export default function App() {
     if (result?.success && result.skill) {
       appendLocalNote(`Skill "${result.skill.id}" installed globally from URL.`);
       refreshDiscoveredSkills();
-      setSidebarTab('skills');
+      setActiveModal('skills');
       setSkillInstallKey((k) => k + 1);
     } else {
       appendLocalNote(`Failed to install skill from URL: ${result?.error ?? 'Must be a raw SKILL.md with YAML frontmatter.'}`);
@@ -541,11 +621,13 @@ export default function App() {
     setMessages(s.messages ?? []);
     setHistory(s.history ?? undefined);
     setCurrentSessionId(s.id);
-    setSidebarTab(null);
+    setActiveModal(null);
     // Restore persisted usage; absent → null/zeros, and the display layer
     // falls back to a live chars/4 estimate of the restored history.
     setSessionUsageBoth(s.usage?.session ?? EMPTY_SESSION_USAGE);
     setContextInfoBoth(s.usage?.context ?? null);
+    setProgressBoth(s.progress ?? null);
+    setCurrentCreatedAt(s.createdAt ?? Date.now());
   };
 
   const handleDeleteSession = async (id: string) => {
@@ -646,10 +728,19 @@ export default function App() {
         appendLocalNote(`Profiles: ${profiles.map((p: any) => p.name).join(', ') || '(none configured)'}. Usage: /model <name>.`);
       }
     },
-    { name: 'skills', description: 'Open the skills panel', run: () => setSidebarTab('skills') },
-    { name: 'sessions', description: 'Open saved sessions', run: () => setSidebarTab('sessions') },
-    { name: 'mcp', description: 'Open MCP servers', run: () => setSidebarTab('mcp') },
-    { name: 'settings', description: 'Open settings', run: () => setSidebarTab('settings') },
+    {
+      name: 'memory', description: 'Open a memory instruction file in your editor', run: () => {
+        const global = window.confirm('Open GLOBAL memory?\n\nOK = global (~/.moon/MOON.md)\nCancel = this project (MOON.md)');
+        window.electron?.openMemory(global ? 'global' : 'project', workspace).then((res: any) => {
+          if (!res?.ok) appendLocalNote(`Couldn't open memory${res?.error ? `: ${res.error}` : '.'}`);
+        });
+      }
+    },
+    { name: 'remember', description: 'Save a memory: /remember <text>', run: (arg?: string) => quickAddMemory(arg ?? '') },
+    { name: 'skills', description: 'Open the skills panel', run: () => setActiveModal('skills') },
+    { name: 'sessions', description: 'Saved tasks are in the left sidebar', run: () => appendLocalNote('Saved tasks are listed in the left sidebar, grouped by workspace.') },
+    { name: 'mcp', description: 'Open MCP servers', run: () => setActiveModal('mcp') },
+    { name: 'settings', description: 'Open settings', run: () => setActiveModal('settings') },
     {
       name: 'debug', description: 'Show diagnostic info about skills, workspace, and config', run: () => {
         const lines = [
@@ -657,7 +748,6 @@ export default function App() {
           `activeProfile: ${activeProfile?.name ?? '(none)'}`,
           `discoveredSkills: ${discoveredSkills.map((s: any) => s.id).join(', ') || '(none)'}`,
           `invokedSkills: ${invokedSkills.join(', ') || '(none)'}`,
-          `activeSkills: ${activeSkills.map((s: any) => s.id).join(', ') || '(none)'}`,
           `electron.createSkill: ${typeof window.electron?.createSkill}`,
           `electron.installSkill: ${typeof window.electron?.installSkill}`,
           `electron.installMarketplaceSkill: ${typeof window.electron?.installMarketplaceSkill}`,
@@ -684,7 +774,7 @@ export default function App() {
           ? discoveredSkills.map((s: any) => `/${s.id} — ${(s.description ?? '').slice(0, 80)}`).join('\n')
           : 'No installed skills found. Open the Skills panel to create or install one.';
         appendLocalNote(`Installed skills:\n${lines}`);
-        setSidebarTab('skills');
+        setActiveModal('skills');
       }
     },
     {
@@ -701,12 +791,6 @@ export default function App() {
     setPermissionQueue(prev => prev.slice(1));
   };
 
-  const permissionDetail = (req: any) => {
-    if (req.name === 'run_command') return req.arguments?.command;
-    if (req.name === 'edit_file') return `${req.arguments?.filePath}\n--- remove\n${req.arguments?.oldString}\n+++ add\n${req.arguments?.newString}`;
-    return req.arguments?.filePath ?? JSON.stringify(req.arguments);
-  };
-
   const inputDisabled = !workspace || isTyping || !activeProfile?.hasKey;
   const inputPlaceholder = !workspace
     ? 'Select a workspace to get started...'
@@ -714,211 +798,177 @@ export default function App() {
       ? 'Add a model profile in Settings…'
       : 'Ask Moon Code anything. Shift+Enter for new line.';
 
+  const firstUser = messages.find((m) => m.role === 'user');
+  const taskTitle = firstUser ? firstUser.content.trim().slice(0, 90) : '';
+
+  // A turn's file-change summary is attached to the last assistant message of a
+  // contiguous assistant run (text→tool→text splits into several messages).
+  const turnToolCalls = (endIdx: number) => {
+    let start = endIdx;
+    while (start - 1 >= 0 && messages[start - 1].role === 'assistant') start--;
+    const calls: any[] = [];
+    for (let k = start; k <= endIdx; k++) if (messages[k].toolCalls) calls.push(...messages[k].toolCalls);
+    return calls;
+  };
+  const isTurnEnd = (i: number) =>
+    messages[i].role === 'assistant' && (i === messages.length - 1 || messages[i + 1].role === 'user');
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '20px', paddingTop: '40px', position: 'relative', boxSizing: 'border-box' }}>
-
-      {/* Permission Request Modal */}
-      {permissionQueue.length > 0 && (
-        <div className="modal-overlay">
-          <div className="glass-panel modal-content">
-            <h3 style={{ margin: 0 }}>Permission required</h3>
-            <p style={{ margin: '8px 0', color: 'var(--text-secondary)' }}>
-              {permissionQueue[0].agent && permissionQueue[0].agent !== 'main' ? `Subagent ${permissionQueue[0].agent}` : 'The agent'} wants to run <strong>{permissionQueue[0].name}</strong>:
-            </p>
-            <pre style={{
-              background: 'rgba(0,0,0,0.4)',
-              padding: '10px',
-              borderRadius: '8px',
-              maxHeight: '200px',
-              overflow: 'auto',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-all',
-              fontSize: '12px',
-              margin: 0
-            }}>{permissionDetail(permissionQueue[0])}</pre>
-            <div style={{ display: 'flex', gap: '10px', marginTop: '14px', justifyContent: 'flex-end' }}>
-              <button
-                onClick={() => respondPermission(false, false)}
-                className="glass-panel"
-                style={{ padding: '8px 14px', cursor: 'pointer', color: 'var(--text-primary)' }}
-              >
-                Deny
-              </button>
-              <button
-                onClick={() => respondPermission(true, false)}
-                className="glass-panel"
-                style={{ padding: '8px 14px', cursor: 'pointer', color: 'var(--text-primary)' }}
-              >
-                Allow once
-              </button>
-              <button
-                onClick={() => respondPermission(true, true)}
-                style={{
-                  padding: '8px 14px',
-                  cursor: 'pointer',
-                  background: 'var(--accent-color)',
-                  color: '#000',
-                  border: 'none',
-                  borderRadius: 'var(--radius-md)',
-                  fontWeight: 600
-                }}
-              >
-                Always allow ({permissionQueue[0].name})
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Sidebar + main column */}
-      <div style={{ display: 'flex', flexDirection: 'row', flex: 1, minHeight: 0, gap: '20px' }}>
-
-      <Sidebar
-        activeTab={sidebarTab}
-        onTabChange={setSidebarTab}
-        activeSkillIds={activeSkills.map((s) => s.id)}
-        onToggleSkill={handleToggleSkill}
-        discoveredSkills={discoveredSkills}
-        invokedSkillIds={invokedSkills}
-        onInvokeSkill={(id: string) => { invokeSkillById(id); setSidebarTab(null); }}
-        onCreateSkill={handleCreateSkill}
-        onInstallSkill={handleInstallSkill}
-        onInstallMarketplaceSkill={handleInstallMarketplaceSkill}
-        onInstallSkillFromUrl={handleInstallSkillFromUrl}
-        skillInstallKey={skillInstallKey}
-        mcpData={mcpData}
-        busy={isTyping}
-        onConnectMcpServer={(id: string) => window.electron?.connectMcp(id).then(setMcpData)}
-        onDisconnectMcpServer={(id: string) => window.electron?.disconnectMcp(id).then(setMcpData)}
-        onSaveMcpServer={(def: any, secrets: any) => window.electron?.upsertMcpServer(def, secrets).then(setMcpData)}
-        onDeleteMcpServer={(id: string) => window.electron?.deleteMcpServer(id).then(setMcpData)}
-        onAddMcpPreset={handleAddMcpPreset}
+    <div className="app-shell">
+      <TaskSidebar
         sessions={sessionList}
+        currentSessionId={currentSessionId}
+        workspace={workspace}
+        onNewTask={startNewChat}
+        onOpenWorkspace={selectWorkspace}
+        onOpenSkills={() => setActiveModal('skills')}
+        onOpenSettings={() => setActiveModal('settings')}
         onSelectSession={handleSelectSession}
         onDeleteSession={handleDeleteSession}
-        config={config}
-        onSetActiveProfile={(id: string) => window.electron?.setActiveProfile(id).then(setConfig)}
-        onSaveProfile={(profile: any, apiKey?: string) => window.electron?.upsertProfile(profile, apiKey).then(setConfig)}
-        onDeleteProfile={(id: string) => window.electron?.deleteProfile(id).then(setConfig)}
-        sessionUsage={sessionUsage}
-        contextInfo={displayContext}
-        activeProfile={activeProfile}
-        activeLimits={activeLimits}
+        activeProfileName={activeProfile?.name}
       />
 
-      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
+      <div className="center-col">
+        <TopBar
+          title={taskTitle}
+          workspace={workspace}
+          git={gitSnapshot}
+          onCheckout={handleCheckout}
+          rightPanelOpen={rightPanelOpen}
+          onToggleRightPanel={toggleRightPanel}
+        />
 
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <img src="./moon-logo.png" width={28} height={28} alt="Moon Code" />
-          <h1 style={{ margin: 0, fontSize: '16px', fontWeight: 700, letterSpacing: '-0.02em' }}>Moon Code</h1>
-        </div>
-
-        <div style={{ display: 'flex', gap: '10px' }}>
-          <button
-            onClick={selectWorkspace}
-            className="glass-panel"
-            style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '14px' }}
-          >
-            <FolderOpen size={16} />
-            {workspace ? workspace.split('/').pop() : 'Select Workspace'}
-          </button>
-
-          <button
-            onClick={startNewChat}
-            className="glass-panel"
-            style={{ display: 'flex', alignItems: 'center', padding: '8px 12px', color: 'var(--text-primary)', cursor: 'pointer' }}
-            title="New Chat"
-          >
-            <Plus size={16} />
-          </button>
-        </div>
-      </div>
-
-      {/* Chat Area */}
-      <div className="chat-container glass-panel" style={{ flexGrow: 1, overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-        {messages.length === 0 ? (
-          <div style={{ margin: 'auto', textAlign: 'center', color: 'var(--text-secondary)' }}>
-            <h2 style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text-primary)' }}>How can I help you code today?</h2>
-            <p>Select a workspace and start chatting.</p>
-          </div>
-        ) : (
-          messages.map((msg, i) => {
-            return (
-              <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
+        <div className="chat-container">
+          {messages.length === 0 ? (
+            <div className="chat-empty">
+              <h2>How can I help you code today?</h2>
+              <p>{workspace ? 'Ask anything, or start a task below.' : 'Open a workspace to get started.'}</p>
+            </div>
+          ) : (
+            messages.map((msg, i) => (
+              <div key={i} className="msg-row">
                 {msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0 && (
                   <div className="activity-block">
-                    {msg.toolCalls.map((tool: any, j: number) => <ToolActivity key={j} tool={tool} />)}
+                    {msg.toolCalls.map((tool: any, j: number) => tool.name === 'render_ui'
+                      ? <UiWidgetBlock key={j} tool={tool} />
+                      : <ToolChip key={j} tool={tool} />)}
                   </div>
                 )}
                 {(msg.role === 'user' || msg.content !== '' || (isTyping && i === messages.length - 1)) && (
-                  <div style={{
-                    background: msg.role === 'user' ? 'var(--accent-color)' : 'rgba(255,255,255,0.05)',
-                    color: msg.role === 'user' ? '#000' : 'var(--text-primary)',
-                    padding: '12px 16px',
-                    borderRadius: '12px',
-                    maxWidth: '80%',
-                    lineHeight: '1.5',
-                    whiteSpace: 'pre-wrap'
-                  }}>
+                  <div className={`msg ${msg.role === 'user' ? 'msg-user' : 'msg-assistant'}`}>
                     {msg.role === 'assistant' ? (
                       <AssistantContent content={msg.content} streaming={isTyping && i === messages.length - 1} />
                     ) : msg.content}
                   </div>
                 )}
+                {isTurnEnd(i) && !(isTyping && i === messages.length - 1) && (
+                  <TurnSummaryCard toolCalls={turnToolCalls(i)} />
+                )}
               </div>
-            );
-          })
+            ))
+          )}
+          {permissionQueue.length > 0 && (
+            <PermissionRequest req={permissionQueue[0]} onRespond={respondPermission} />
+          )}
+          {isTyping && permissionQueue.length === 0 && <StatusIndicator text={statusText} />}
+          <div ref={chatEndRef} />
+        </div>
+
+        {displayContext && displayContext.pct >= 0.8 && !isTyping && (
+          <div className="context-warning-banner">
+            <span>
+              Context is {Math.round(displayContext.pct * 100)}%{displayContext.estimated ? ' (estimated)' : ''} full — compaction will run automatically soon.
+            </span>
+            <button className="context-warning-action" onClick={() => compactNow()}>Compact now</button>
+          </div>
         )}
-        {isTyping && <StatusIndicator text={statusText} />}
-        <div ref={chatEndRef} />
+
+        <div className="input-dock">
+          <RichInput
+            value={input}
+            onChange={setInput}
+            onSend={handleSend}
+            disabled={inputDisabled}
+            placeholder={inputPlaceholder}
+            onAddSkill={() => setActiveModal('skills')}
+            mcpServers={connectedMcpServers}
+            onConnectMcp={() => setActiveModal('mcp')}
+            profiles={config?.profiles ?? []}
+            activeProfileId={config?.activeProfileId ?? null}
+            onSelectProfile={(id) => window.electron?.setActiveProfile(id).then(setConfig)}
+            busy={isTyping}
+            onStop={() => window.electron?.cancelPrompt()}
+            commands={slashCommands}
+            onUnknownCommand={(name, arg) => {
+              const known = slashCommands.find((c) => c.name === name);
+              if (known) {
+                known.run(arg);
+              } else {
+                appendLocalNote(`Unknown command /${name}. Type /help for available commands.`);
+              }
+            }}
+            contextInfo={displayContext}
+            capabilities={activeLimits.capabilities}
+          />
+        </div>
       </div>
 
-      {/* Context-limit warning banner */}
-      {displayContext && displayContext.pct >= 0.8 && !isTyping && (
-        <div className="glass-panel context-warning-banner">
-          <span>
-            Context is {Math.round(displayContext.pct * 100)}%{displayContext.estimated ? ' (estimated)' : ''} full — compaction will run automatically soon.
-          </span>
-          <button className="context-warning-action" onClick={() => compactNow()}>Compact now</button>
-        </div>
+      {rightPanelOpen && (
+        <RightPanel
+          git={gitSnapshot}
+          loading={gitLoading}
+          workspace={workspace}
+          onRefresh={refreshGit}
+          onCommit={handleCommit}
+          progress={progress}
+          sessionUsage={sessionUsage}
+          createdAt={currentCreatedAt}
+        />
       )}
 
-      {/* Rich Input */}
-      <div style={{ marginTop: displayContext && displayContext.pct >= 0.8 && !isTyping ? '8px' : '20px' }}>
-        <RichInput
-          value={input}
-          onChange={setInput}
-          onSend={handleSend}
-          disabled={inputDisabled}
-          placeholder={inputPlaceholder}
-          skills={activeSkills}
-          onAddSkill={() => setSidebarTab('skills')}
-          mcpServers={connectedMcpServers}
-          onConnectMcp={() => setSidebarTab('mcp')}
-          profiles={config?.profiles ?? []}
-          activeProfileId={config?.activeProfileId ?? null}
-          onSelectProfile={(id) => window.electron?.setActiveProfile(id).then(setConfig)}
-          busy={isTyping}
-          onStop={() => window.electron?.cancelPrompt()}
-          commands={slashCommands}
-          onUnknownCommand={(name, arg) => {
-            const known = slashCommands.find((c) => c.name === name);
-            if (known) {
-              known.run(arg);
-            } else {
-              appendLocalNote(`Unknown command /${name}. Type /help for available commands.`);
-            }
-          }}
-          contextInfo={displayContext}
-          capabilities={activeLimits.capabilities}
+      <OverlayModal open={activeModal === 'skills'} onClose={() => setActiveModal(null)} wide>
+        <SkillsPanel
+          discoveredSkills={discoveredSkills}
+          invokedSkillIds={invokedSkills}
+          onInvokeSkill={(id: string) => { invokeSkillById(id); setActiveModal(null); }}
+          onCreateSkill={handleCreateSkill}
+          onInstallSkill={handleInstallSkill}
+          onInstallMarketplaceSkill={handleInstallMarketplaceSkill}
+          onInstallSkillFromUrl={handleInstallSkillFromUrl}
+          skillInstallKey={skillInstallKey}
         />
-      </div>
+      </OverlayModal>
 
-      </div>
+      <OverlayModal open={activeModal === 'mcp'} onClose={() => setActiveModal(null)} wide>
+        <McpPanel
+          servers={mcpData.servers}
+          statuses={mcpData.statuses}
+          busy={isTyping}
+          onConnect={(id: string) => window.electron?.connectMcp(id).then(setMcpData)}
+          onDisconnect={(id: string) => window.electron?.disconnectMcp(id).then(setMcpData)}
+          onSaveServer={(def: any, secrets: any) => window.electron?.upsertMcpServer(def, secrets).then(setMcpData)}
+          onDelete={(id: string) => window.electron?.deleteMcpServer(id).then(setMcpData)}
+          onAddPreset={handleAddMcpPreset}
+        />
+      </OverlayModal>
 
-      </div>
+      <OverlayModal open={activeModal === 'settings'} onClose={() => setActiveModal(null)}>
+        <SettingsPanel
+          config={config}
+          onSetActiveProfile={(id: string) => window.electron?.setActiveProfile(id).then(setConfig)}
+          onSaveProfile={(profile: any, apiKey?: string) => window.electron?.upsertProfile(profile, apiKey).then(setConfig)}
+          onDeleteProfile={(id: string) => window.electron?.deleteProfile(id).then(setConfig)}
+        />
+      </OverlayModal>
+
+      <OverlayModal open={activeModal === 'usage'} onClose={() => setActiveModal(null)}>
+        <UsagePanel
+          sessionUsage={sessionUsage}
+          contextInfo={displayContext}
+          activeProfile={activeProfile}
+          activeLimits={activeLimits}
+        />
+      </OverlayModal>
     </div>
   );
 }

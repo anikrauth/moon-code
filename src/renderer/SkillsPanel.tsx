@@ -1,16 +1,13 @@
 // @ts-nocheck
 import React, { useState, useEffect } from 'react';
-import { Search, Puzzle, Zap, Check, Plus, FileText, Download, Store, Globe } from 'lucide-react';
+import { Search, Puzzle, Plus, FileText, Download, Store, Globe } from 'lucide-react';
 import { SKILL_MARKETPLACE } from '../shared/skillMarketplace';
-import { SKILL_CATALOG } from '../shared/skillCatalog';
 
 /* ------------------------------------------------------------------ */
 /*  Props                                                              */
 /* ------------------------------------------------------------------ */
 
 interface SkillsPanelProps {
-  activeSkillIds: string[];
-  onToggleSkill: (skill: any) => void;
   discoveredSkills?: any[];
   invokedSkillIds?: string[];
   onInvokeSkill?: (id: string) => void;
@@ -26,8 +23,6 @@ interface SkillsPanelProps {
 /* ------------------------------------------------------------------ */
 
 export default function SkillsPanel({
-  activeSkillIds,
-  onToggleSkill,
   discoveredSkills = [],
   invokedSkillIds = [],
   onInvokeSkill,
@@ -43,19 +38,11 @@ export default function SkillsPanel({
     if (skillInstallKey && skillInstallKey > 0) setSearch('');
   }, [skillInstallKey]);
 
-  const filtered = SKILL_CATALOG.filter(
-    (s) =>
-      s.name.toLowerCase().includes(search.toLowerCase()) ||
-      s.description.toLowerCase().includes(search.toLowerCase()) ||
-      s.category.toLowerCase().includes(search.toLowerCase()),
-  );
   const filteredDiscovered = discoveredSkills.filter(
     (s) =>
       s.name.toLowerCase().includes(search.toLowerCase()) ||
       s.description.toLowerCase().includes(search.toLowerCase()),
   );
-
-  const categories = [...new Set(filtered.map((s) => s.category))];
 
   return (
     <>
@@ -81,35 +68,6 @@ export default function SkillsPanel({
 
       {/* Catalog */}
       <div className="sp-catalog">
-        {categories.map((cat) => (
-          <div key={cat} className="sp-category">
-            <span className="sp-category-label">{cat}</span>
-            {filtered
-              .filter((s) => s.category === cat)
-              .map((skill) => {
-                const isActive = activeSkillIds.includes(skill.id);
-                return (
-                  <button
-                    key={skill.id}
-                    className={`sp-skill-row ${isActive ? 'sp-skill-active' : ''}`}
-                    onClick={() => onToggleSkill(skill)}
-                  >
-                    <div className="sp-skill-info">
-                      <Zap size={14} className="sp-skill-icon" />
-                      <div>
-                        <span className="sp-skill-name">{skill.name}</span>
-                        <span className="sp-skill-desc">{skill.description}</span>
-                      </div>
-                    </div>
-                    <span className="sp-skill-toggle">
-                      {isActive ? <Check size={14} /> : <Plus size={14} />}
-                    </span>
-                  </button>
-                );
-              })}
-          </div>
-        ))}
-
         {filteredDiscovered.length > 0 && (
           <div className="sp-category">
             <span className="sp-category-label">From .moon/skills</span>
@@ -169,7 +127,7 @@ export default function SkillsPanel({
           </div>
         )}
 
-        {filtered.length === 0 && filteredDiscovered.length === 0 && SKILL_MARKETPLACE.length === 0 && (
+        {filteredDiscovered.length === 0 && SKILL_MARKETPLACE.length === 0 && (
           <div className="sp-empty">No skills match your search.</div>
         )}
       </div>

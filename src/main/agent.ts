@@ -15,9 +15,13 @@ const execAsync = promisify(exec);
 import * as dotenv from 'dotenv';
 dotenv.config();
 
-import { catalog } from '../shared/uiCatalog';
+import { parseRenderUiSpec } from '../shared/renderUiSpec';
 import { globSearch, grepSearch } from './searchTools';
 import { resolveLimits } from '../shared/modelLimits';
+import { computeLineDiff } from './diffStats';
+import { buildInvocableCatalog } from './skillScanner';
+import { installSkillPackage } from './skillInstaller';
+import { memoryStore } from './memoryStore';
 
 const MAX_HISTORY = 20;
 const KEEP_RECENT = 8;
@@ -35,6 +39,23 @@ const READ_DEFAULT_LINES = 2000;
 const READ_CHAR_LIMIT = 50000;
 const LIST_DIR_MAX_ENTRIES = 500;
 const MAX_STEPS = 50;
+
+/* Hand-written instead of catalog.prompt(): the generated prompt is ~14 KB of
+   state/bindings/actions machinery this static catalog never uses. Keep this
+   in sync with src/shared/uiCatalog.ts. */
+const RENDER_UI_DESCRIPTION = `Render a rich UI widget inline in the chat. Use for tabular data, file listings, structured comparisons, or small dashboards — anywhere a widget communicates better than markdown prose.
+The "spec" input is SpecStream JSONL: one RFC-6902 JSON Patch op per line, building /root then /elements. Example:
+{"op":"add","path":"/root","value":"main"}
+{"op":"add","path":"/elements/main","value":{"type":"Stack","props":{},"children":["title","tbl"]}}
+{"op":"add","path":"/elements/title","value":{"type":"Text","props":{"content":"Files"},"children":[]}}
+{"op":"add","path":"/elements/tbl","value":{"type":"Table","props":{"headers":["Name","Size"],"rows":[["a.ts","1 KB"]]},"children":[]}}
+Available components (props):
+- Stack {} — vertical container; always the root; child element ids go in "children"
+- Text {content: string} — one paragraph
+- List {items: string[], ordered: boolean|null}
+- Table {headers: string[], rows: string[][]} — every row must match headers length
+- CodeBlock {code: string, language: string|null}
+Rules: every element needs "type", "props", "children" ([] when empty). Do not invent component types. If the tool returns an error, fix the spec and call it again.`;
 
 function truncateOutput(text, limit = TOOL_OUTPUT_CHAR_LIMIT) {
     if (text.length <= limit) return text;
@@ -105,12 +126,14 @@ export async function forceCompact(history, settings, onEvent) {
     return compactHistory(history, settings, onEvent, undefined, true);
 }
 
-async function loadProjectMemory(workspace: string): Promise<string> {
+// Load both instruction layers (global ~/.moon/MOON.md + project MOON.md, with
+// @imports resolved) plus the learned-fact index for prompt injection.
+function loadMemory(workspace: string): { global: string; project: string; catalog: { name: string; description: string; scope: string }[] } {
     try {
-        const content = await fs.promises.readFile(path.join(workspace, MEMORY_FILE), 'utf-8');
-        return content.trim().slice(0, MEMORY_CHAR_LIMIT);
+        const { global, project } = memoryStore.loadInstructions(workspace);
+        return { global, project, catalog: memoryStore.buildMemoryCatalog(workspace) };
     } catch {
-        return '';
+        return { global: '', project: '', catalog: [] };
     }
 }
 
@@ -204,10 +227,14 @@ function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpaw
                 }
                 if (!await requestPermission('write_file', { filePath }, agentId)) return denied('write_file');
                 try {
+                    let oldContent = null;
+                    try { oldContent = await fs.promises.readFile(absPath, 'utf-8'); } catch { /* new file */ }
                     await fs.promises.mkdir(path.dirname(absPath), { recursive: true });
                     await fs.promises.writeFile(absPath, content, 'utf-8');
                     const res = `Successfully wrote to ${filePath}`;
-                    emit({ type: 'tool_result', name: 'write_file', result: res });
+                    const { adds, dels } = computeLineDiff(oldContent, content);
+                    emit({ type: 'tool_result', name: 'write_file', result: res,
+                        fileChange: { path: filePath, adds, dels, kind: oldContent == null ? 'create' : 'update' } });
                     return res;
                 } catch (e: any) {
                     const errMsg = `Error writing file: ${e.message}`;
@@ -247,7 +274,9 @@ function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpaw
                     }
                     await fs.promises.writeFile(absPath, content.replace(oldString, newString), 'utf-8');
                     const res = `Successfully edited ${filePath}`;
-                    emit({ type: 'tool_result', name: 'edit_file', result: res });
+                    const { adds, dels } = computeLineDiff(oldString, newString);
+                    emit({ type: 'tool_result', name: 'edit_file', result: res,
+                        fileChange: { path: filePath, adds, dels, kind: 'update' } });
                     return res;
                 } catch (e: any) {
                     const errMsg = `Error editing file: ${e.message}`;
@@ -335,7 +364,109 @@ function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpaw
             }
         });
     }
+    tools.install_skill = tool({
+        description: 'Install a skill from the open agent-skills ecosystem (skills.sh) by package spec, e.g. "vercel-labs/agent-skills@react-best-practices" or "owner/repo". Runs non-interactively and makes the skill available immediately — prefer this over run_command with npx. The skill\'s full instructions are returned so you can start using it right away.',
+        inputSchema: z.object({
+            package: z.string().describe('The skill package spec: "owner/repo" or "owner/repo@skill".'),
+        }),
+        execute: async ({ package: pkg }) => {
+            emit({ type: 'tool_call', name: 'install_skill', arguments: JSON.stringify({ package: pkg }) });
+            // Downloads and runs third-party code — gate behind the same
+            // permission prompt as run_command.
+            if (!await requestPermission('install_skill', { package: pkg }, agentId)) return denied('install_skill');
+            const result = await installSkillPackage(pkg, workspace, { signal: abortSignal });
+            if (!result.success) {
+                const errMsg = truncateOutput(`Error: ${result.error}`);
+                emit({ type: 'tool_result', name: 'install_skill', result: errMsg });
+                return errMsg;
+            }
+            // Refresh the live catalog in place so the `skill` tool can load the
+            // new skill later in this same turn (both tools share this array).
+            try {
+                const { skillsCatalog: fresh } = buildInvocableCatalog(workspace);
+                if (Array.isArray(skillsCatalog)) { skillsCatalog.length = 0; skillsCatalog.push(...fresh); }
+            } catch { /* refresh is best-effort; content is returned below regardless */ }
+            const skill = result.skill;
+            emit({ type: 'skill_installed', id: skill?.id ?? null, location: '~/.agents/skills' });
+            const res = skill
+                ? `Installed "${skill.id}" to ~/.agents/skills (shared ecosystem store — available now, no restart needed).\n\n--- ${skill.id} instructions ---\n${skill.content}`
+                : `Installed ${pkg} to ~/.agents/skills. It is now available via the skill tool.`;
+            const out = truncateOutput(res);
+            emit({ type: 'tool_result', name: 'install_skill', result: out });
+            return out;
+        }
+    });
+    tools.read_memory = tool({
+        description: 'Load the full saved detail of a fact listed under MEMORY in the system prompt. Call this before relying on a remembered fact — the index only shows a one-line summary.',
+        inputSchema: z.object({
+            name: z.string().describe('The fact name exactly as listed under MEMORY.'),
+            scope: z.enum(['project', 'global']).nullable().optional().describe('Where to look. Omit to search project then global.'),
+        }),
+        execute: async ({ name, scope }) => {
+            emit({ type: 'tool_call', name: 'read_memory', arguments: JSON.stringify({ name }) });
+            const res = memoryStore.readFact(scope ?? null, workspace, name) ?? `Error: no memory fact named "${name}".`;
+            emit({ type: 'tool_result', name: 'read_memory', result: res });
+            return res;
+        }
+    });
+    tools.write_memory = tool({
+        description: 'Persist a durable fact to memory so it survives across sessions and future chats. Use for stable facts, user preferences, decisions, or project context worth recalling later — NOT transient conversation detail. Reuse an existing name to update it.',
+        inputSchema: z.object({
+            name: z.string().describe('Short kebab-case id, e.g. "api-base-url".'),
+            description: z.string().describe('One-line summary shown in the MEMORY index.'),
+            body: z.string().describe('The fact content to store.'),
+            scope: z.enum(['project', 'global']).nullable().optional().describe('"project" (this workspace, default) or "global" (all projects).'),
+        }),
+        execute: async ({ name, description, body, scope }) => {
+            const useScope = scope ?? 'project';
+            emit({ type: 'tool_call', name: 'write_memory', arguments: JSON.stringify({ name, scope: useScope }) });
+            if (!await requestPermission('write_memory', { name, scope: useScope }, agentId)) return denied('write_memory');
+            try {
+                memoryStore.writeFact(useScope, workspace, { name, description, body });
+                const res = `Saved memory "${name}" (${useScope}).`;
+                emit({ type: 'tool_result', name: 'write_memory', result: res });
+                return res;
+            } catch (e: any) {
+                const errMsg = `Error saving memory: ${e.message}`;
+                emit({ type: 'tool_result', name: 'write_memory', result: errMsg });
+                return errMsg;
+            }
+        }
+    });
     if (includeSpawn) {
+        // Main agent only: subagents report plain text back to the orchestrator,
+        // so a widget rendered from a subagent would appear out of context.
+        tools.render_ui = tool({
+            description: RENDER_UI_DESCRIPTION,
+            inputSchema: z.object({
+                spec: z.string().describe('SpecStream JSONL, one JSON Patch op per line.'),
+            }),
+            execute: async ({ spec }) => {
+                emit({ type: 'tool_call', name: 'render_ui', arguments: JSON.stringify({ spec }) });
+                const parsed = parseRenderUiSpec(spec);
+                const res = parsed.ok
+                    ? 'Widget rendered in the chat. Do not repeat its contents in prose; continue after it if needed.'
+                    : `Error: invalid UI spec — ${parsed.error}\nFix the issues and call render_ui again.`;
+                emit({ type: 'tool_result', name: 'render_ui', result: res });
+                return res;
+            }
+        });
+        tools.set_progress = tool({
+            description: 'Track your plan for the current task so the user can follow along in the Progress panel. Call this at the START of any multi-step task with the goal and an ordered checklist of steps, then call it again whenever a step changes status. Keep exactly one step "active" at a time; mark finished steps "done". For trivial one-step requests, skip it.',
+            inputSchema: z.object({
+                goal: z.string().min(1).describe('One-line description of what the user asked for.'),
+                steps: z.array(z.object({
+                    text: z.string().min(1).describe('Short imperative step description.'),
+                    status: z.enum(['pending', 'active', 'done']).describe('pending = not started, active = in progress now, done = finished.'),
+                })).min(1).max(30).describe('Ordered checklist. Exactly one step should be "active".'),
+            }),
+            execute: async ({ goal, steps }) => {
+                // No tool_call/tool_result events — progress drives a side panel,
+                // not the transcript, so it stays out of the chat chip stream.
+                emit({ type: 'progress', goal, steps });
+                return 'Progress updated.';
+            }
+        });
         tools.spawn_agent = tool({
             description: 'Delegate a self-contained task to a parallel subagent with its own tool access. The subagent cannot ask you questions — include all needed context in the task. Returns its plain-text findings. You may call spawn_agent multiple times in one step to run tasks in parallel.',
             inputSchema: z.object({
@@ -345,7 +476,9 @@ function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpaw
                 const subId = `sub-${++spawnState.counter}`;
                 emit({ type: 'tool_call', name: 'spawn_agent', arguments: JSON.stringify({ task }) });
                 const subSystemPrompt = `You are a Moon Code subagent working autonomously in the workspace at ${workspace}. Complete the following task using your tools, then reply with concise plain-text findings. Do not ask questions; do not output JSON UI specs.
+${spawnState.globalMemory ? `\nUSER INSTRUCTIONS (global, from ~/.moon/MOON.md — apply to every project):\n${spawnState.globalMemory}\n` : ''}
 ${spawnState.projectMemory ? `\nPROJECT INSTRUCTIONS (from MOON.md in the workspace root — follow these):\n${spawnState.projectMemory}\n` : ''}
+${(spawnState.memoryCatalog?.length) ? `\nMEMORY (call read_memory to load a fact's detail):\n${spawnState.memoryCatalog.map((f) => `- ${f.name} [${f.scope}] — ${f.description}`).join('\n')}\n` : ''}
 ${spawnState.skillsText ? `\n${spawnState.skillsText}\n` : ''}`;
                 try {
                     const subTools = makeTools({ workspace, onEvent, requestPermission, agentId: subId, includeSpawn: false, settings, spawnState, abortSignal, extraTools, limits, skillsCatalog: spawnState.skillsCatalog });
@@ -412,10 +545,14 @@ async function runAgentLoop({ prompt, workspace, settings, history, onEvent, req
     });
     limits = limits ?? resolveLimits(settings?.model, settings);
     const userMsg = { role: 'user', content: prompt };
+    // System content belongs in the `system` option, never in `messages` — the
+    // provider rejects system-role turns here. Strip any that slipped into
+    // history (e.g. from older builds) so a stale message can't break a send.
+    const priorMessages = (history ?? []).filter((m: any) => m?.role !== 'system');
     const result = streamText({
         model: customOpenAI.chat(settings.model || 'gpt-4o'),
         system: systemPrompt,
-        messages: [...(history ?? []), userMsg],
+        messages: [...priorMessages, userMsg],
         tools,
         abortSignal,
         maxOutputTokens: limits.maxOutputTokens,
@@ -470,31 +607,23 @@ export async function handlePrompt(
     try {
         const limits = resolveLimits(settings?.model, settings);
         history = await compactHistory(history, settings, onEvent, abortSignal, false, limits, usageHint?.lastInputTokens);
-        if (usageHint?.skillContent) {
-            history = [{ role: 'system', content: usageHint.skillContent }, ...(history ?? [])];
-        }
 
-        const projectMemory = await loadProjectMemory(workspace);
+        const { global: globalMemory, project: projectMemory, catalog: memoryCatalog } = loadMemory(workspace);
 
         const systemPrompt = `You are Moon Code, an advanced coding agentic IDE for Mac. You have full access to the user's workspace at ${workspace}. You must use tools to accomplish the user's requests autonomously. Do NOT wait for the user if you can figure it out. Answer concisely. Use grep_search and glob_search to find code instead of running grep or find through run_command.
+${globalMemory ? `\nUSER INSTRUCTIONS (global, from ~/.moon/MOON.md — apply to every project):\n${globalMemory}\n` : ''}
 ${projectMemory ? `\nPROJECT INSTRUCTIONS (from ${MEMORY_FILE} in the workspace root — follow these):\n${projectMemory}\n` : ''}
+${memoryCatalog.length ? `\nMEMORY (facts you saved earlier — call read_memory to load a fact's full detail before relying on it; call write_memory to persist durable new facts):\n${memoryCatalog.map((f) => `- ${f.name} [${f.scope}] — ${f.description}`).join('\n')}\n` : ''}
 ${skillsText ? `\n${skillsText}\n` : ''}
-${catalog.prompt({
-            system: 'Your final answer to the user must be valid UI spec JSONL (SpecStream format), not plain prose.',
-            customRules: [
-                'Always wrap your entire response in a single root Stack element, even for a one-sentence answer.',
-                'Use Table for any tabular or file-listing data instead of describing it in prose.',
-                'Use CodeBlock for command output, code snippets, or file contents.',
-                'Use List for enumerated points or suggestions.',
-                'Use Text for everything else.',
-            ],
-            mode: 'standalone',
-        })}`;
+${usageHint?.skillContent ? `\nACTIVE SKILL — the user explicitly invoked a skill. Follow these instructions for this task:\n${usageHint.skillContent}\n` : ''}
+For any task that takes more than one step, call set_progress at the start with the goal and an ordered checklist, then call it again as steps move to done — keep exactly one step active. Skip it for trivial one-step requests.
+Format answers in GitHub-flavored Markdown (headings, lists, fenced code blocks with language tags).
+When structured data would read better as a widget — tables, file listings, side-by-side comparisons, small dashboards — call the render_ui tool instead of writing a markdown table, then continue in normal markdown. Never paste raw JSON UI specs into your prose.`;
 
         const tools = makeTools({
             workspace, onEvent, requestPermission, agentId: 'main',
             includeSpawn: true, settings,
-            spawnState: { counter: 0, projectMemory, skillsText: skillsText ?? '', skillsCatalog: skillsCatalog ?? [] },
+            spawnState: { counter: 0, projectMemory, globalMemory, memoryCatalog, skillsText: skillsText ?? '', skillsCatalog: skillsCatalog ?? [] },
             abortSignal, extraTools, limits, skillsCatalog: skillsCatalog ?? [],
         });
 

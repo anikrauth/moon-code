@@ -103,7 +103,7 @@ export default function SettingsPanel({ config, onSetActiveProfile, onSaveProfil
           <div style={{ display: 'flex', gap: '8px' }}>
             <button className="glass-panel" style={{ padding: '8px', cursor: 'pointer', color: 'var(--text-primary)', flexGrow: 1 }} onClick={() => setProfileForm(null)}>Cancel</button>
             <button
-              style={{ background: 'var(--accent-color)', color: '#000', border: 'none', borderRadius: 'var(--radius-md)', padding: '8px', cursor: 'pointer', fontWeight: 600, flexGrow: 1 }}
+              style={{ background: 'var(--accent-color)', color: '#fff', border: 'none', borderRadius: 'var(--radius-md)', padding: '8px', cursor: 'pointer', fontWeight: 600, flexGrow: 1 }}
               disabled={!profileForm.name.trim() || !profileForm.model.trim()}
               onClick={() => {
                 const { apiKey, hasKey, ...profile } = profileForm;

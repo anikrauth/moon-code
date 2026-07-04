@@ -58,6 +58,19 @@ function readSkillDir(dirPath, dirName, source) {
   };
 }
 
+function isDirEntry(entryPath, entry) {
+  // Symlinks are how `npx skills add -g` links a shared skill store into an
+  // agent-specific directory (e.g. ~/.claude/skills/<name> -> ~/.agents/skills/<name>).
+  // Treat symlinked directories the same as real ones or those skills go invisible.
+  if (entry.isDirectory()) return true;
+  if (!entry.isSymbolicLink()) return false;
+  try {
+    return fs.statSync(entryPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 function scanDir(baseDir, source) {
   const results = [];
   if (!baseDir || !fs.existsSync(baseDir)) return results;
@@ -68,19 +81,51 @@ function scanDir(baseDir, source) {
     return results;
   }
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const skill = readSkillDir(path.join(baseDir, entry.name), entry.name, source);
+    const entryPath = path.join(baseDir, entry.name);
+    if (!isDirEntry(entryPath, entry)) continue;
+    const skill = readSkillDir(entryPath, entry.name, source);
     if (skill) results.push(skill);
   }
   return results;
 }
 
+// Directories the wider agent-skills ecosystem (`npx skills`, Claude Code,
+// Cursor, Cline, OpenCode, etc.) reads from and writes to. Scanning these
+// directly means a skill installed with `npx skills add -g` is immediately
+// visible to Moon Code with no manual symlink step into ~/.moon/skills.
+const ECOSYSTEM_DIR_NAMES = ['.agents/skills', '.claude/skills'];
+
 export function scanSkills(workspace) {
-  const projectSkills = workspace ? scanDir(path.join(workspace, '.moon', 'skills'), 'project') : [];
-  const personalSkills = scanDir(path.join(os.homedir(), '.moon', 'skills'), 'personal');
+  const home = os.homedir();
+
+  // Priority (lowest → highest, later entries in the map win on id collision):
+  // ecosystem personal < moon personal < ecosystem project < moon project.
+  // Moon-native dirs win because a user managing skills through Moon Code's
+  // own UI (Create/Install Skill) should always take precedence over
+  // whatever the third-party CLI last synced.
+  const layers = [
+    ...ECOSYSTEM_DIR_NAMES.map((rel) => scanDir(path.join(home, rel), 'personal')),
+    scanDir(path.join(home, '.moon', 'skills'), 'personal'),
+    ...(workspace ? ECOSYSTEM_DIR_NAMES.map((rel) => scanDir(path.join(workspace, rel), 'project')) : []),
+    workspace ? scanDir(path.join(workspace, '.moon', 'skills'), 'project') : [],
+  ];
 
   const byId = new Map();
-  for (const skill of personalSkills) byId.set(skill.id, skill);
-  for (const skill of projectSkills) byId.set(skill.id, skill); // project overrides personal
+  for (const layer of layers) for (const skill of layer) byId.set(skill.id, skill);
   return [...byId.values()];
+}
+
+// Single source of truth for the model-facing skill catalog. Progressive
+// disclosure (Claude Code / Codex style): the model only sees id + description
+// up front (skillsText, injected into the system prompt); full instructions are
+// loaded on demand via the `skill` tool. Used both when a turn starts and when
+// `install_skill` rescans mid-turn after a new install.
+export function buildInvocableCatalog(workspace) {
+  const invocable = scanSkills(workspace).filter((s) => !s.disableModelInvocation);
+  const skillsText = invocable.length
+    ? 'AVAILABLE SKILLS — call the `skill` tool with the id to load full instructions before starting matching work:\n'
+      + invocable.map((s) => `- ${s.id}: ${s.description}`).join('\n')
+    : '';
+  const skillsCatalog = invocable.map((s) => ({ id: s.id, description: s.description, content: s.content }));
+  return { skillsText, skillsCatalog };
 }

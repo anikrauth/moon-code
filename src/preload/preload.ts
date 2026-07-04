@@ -14,12 +14,23 @@ contextBridge.exposeInMainWorld('electron', {
   upsertProfile: (profile: any, rawApiKey?: string) => ipcRenderer.invoke('config:upsertProfile', profile, rawApiKey),
   deleteProfile: (id: string) => ipcRenderer.invoke('config:deleteProfile', id),
   setActiveProfile: (id: string) => ipcRenderer.invoke('config:setActiveProfile', id),
-  setSkillIds: (ids: string[]) => ipcRenderer.invoke('config:setSkillIds', ids),
   setMcpIds: (ids: string[]) => ipcRenderer.invoke('config:setMcpIds', ids),
   listSessions: () => ipcRenderer.invoke('sessions:list'),
   getSession: (id: string) => ipcRenderer.invoke('sessions:get', id),
   saveSession: (snapshot: any) => ipcRenderer.invoke('sessions:save', snapshot),
   deleteSession: (id: string) => ipcRenderer.invoke('sessions:delete', id),
+  initWorkspace: (workspace: string) =>
+    ipcRenderer.invoke('workspace:init', workspace) as Promise<{ created: boolean; sources: string[] }>,
+  gitSnapshot: (workspace: string) => ipcRenderer.invoke('git:snapshot', workspace),
+  gitCheckout: (workspace: string, branch: string) =>
+    ipcRenderer.invoke('git:checkout', workspace, branch) as Promise<{ ok: boolean; error?: string }>,
+  gitCommit: (workspace: string, message: string) =>
+    ipcRenderer.invoke('git:commit', workspace, message) as Promise<{ ok: boolean; hash?: string; error?: string }>,
+  appendMemory: (scope: 'project' | 'global', text: string, workspace: string) =>
+    ipcRenderer.invoke('memory:append', scope, text, workspace) as Promise<{ ok: boolean; error?: string }>,
+  listMemory: (workspace: string) => ipcRenderer.invoke('memory:list', workspace),
+  openMemory: (scope: 'project' | 'global', workspace: string) =>
+    ipcRenderer.invoke('memory:open', scope, workspace) as Promise<{ ok: boolean; error?: string }>,
   mcpList: () => ipcRenderer.invoke('mcp:list'),
   upsertMcpServer: (def: any, rawSecrets?: any) => ipcRenderer.invoke('mcp:upsertServer', def, rawSecrets),
   deleteMcpServer: (id: string) => ipcRenderer.invoke('mcp:deleteServer', id),
@@ -40,4 +51,6 @@ contextBridge.exposeInMainWorld('electron', {
     ipcRenderer.invoke('skills:installMarketplace', skillId, workspace) as Promise<{ success: boolean; skill?: any; error?: string }>,
   installSkillFromUrl: (url: string, workspace: string) =>
     ipcRenderer.invoke('skills:installFromUrl', url, workspace) as Promise<{ success: boolean; skill?: any; error?: string }>,
+  installSkillPackage: (spec: string, workspace: string) =>
+    ipcRenderer.invoke('skills:installPackage', spec, workspace) as Promise<{ success: boolean; skill?: any; error?: string }>,
 });

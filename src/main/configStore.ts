@@ -7,7 +7,6 @@ const emptyConfig = () => ({
     version: 1,
     profiles: [],
     activeProfileId: null,
-    activeSkillIds: [],
     connectedMcpIds: [],
     mcpServers: [],
 });
@@ -72,7 +71,6 @@ export function createConfigStore({ dir, safeStorage }) {
             return {
                 version: config.version,
                 activeProfileId: config.activeProfileId,
-                activeSkillIds: [...config.activeSkillIds],
                 connectedMcpIds: [...config.connectedMcpIds],
                 profiles: config.profiles.map(({ apiKeyEnc, enc, ...rest }) => ({ ...rest, hasKey: !!apiKeyEnc })),
                 mcpServers: config.mcpServers.map(({ secretsEnc, enc, ...rest }) => ({ ...rest, hasSecrets: !!secretsEnc })),
@@ -114,11 +112,6 @@ export function createConfigStore({ dir, safeStorage }) {
         setActiveProfile(id) {
             if (!config.profiles.some(p => p.id === id)) return;
             config.activeProfileId = id;
-            persist();
-        },
-
-        setSkillIds(ids) {
-            config.activeSkillIds = [...ids];
             persist();
         },
 

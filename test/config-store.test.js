@@ -78,7 +78,7 @@ test('corrupt config file -> empty config, no throw', (t) => {
   const dir = tmpDir(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   fs.writeFileSync(path.join(dir, 'config.json'), '{not json!!!', 'utf-8');
   const s = mkStore(dir);
-  assert.deepStrictEqual(s.getConfig(), { version: 1, profiles: [], activeProfileId: null, activeSkillIds: [], connectedMcpIds: [], mcpServers: [] });
+  assert.deepStrictEqual(s.getConfig(), { version: 1, profiles: [], activeProfileId: null, connectedMcpIds: [], mcpServers: [] });
 });
 
 test('setActiveProfile with unknown id is a no-op; resolveSettings unknown id null', (t) => {
@@ -90,13 +90,11 @@ test('setActiveProfile with unknown id is a no-op; resolveSettings unknown id nu
   assert.strictEqual(s.resolveSettings('p-nope'), null);
 });
 
-test('skill and mcp id lists persist across reload', (t) => {
+test('mcp id list persists across reload', (t) => {
   const dir = tmpDir(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const s1 = mkStore(dir);
-  s1.setSkillIds(['web-search', 'git-ops']);
   s1.setMcpIds(['github']);
   const s2 = mkStore(dir);
-  assert.deepStrictEqual(s2.getConfig().activeSkillIds, ['web-search', 'git-ops']);
   assert.deepStrictEqual(s2.getConfig().connectedMcpIds, ['github']);
 });
 

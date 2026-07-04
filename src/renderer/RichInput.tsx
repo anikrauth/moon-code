@@ -12,12 +12,6 @@ import {
 /*  Types                                                              */
 /* ------------------------------------------------------------------ */
 
-export interface SkillItem {
-  id: string;
-  name: string;
-  description?: string;
-}
-
 export interface McpServer {
   id: string;
   name: string;
@@ -31,8 +25,6 @@ interface RichInputProps {
   onSend: () => void;
   disabled?: boolean;
   placeholder?: string;
-  /** Active skills attached to this prompt */
-  skills: SkillItem[];
   onAddSkill: () => void;
   /** Connected MCP servers */
   mcpServers: McpServer[];
@@ -59,6 +51,21 @@ interface RichInputProps {
 
 const fmtTok = (n: number) => (n >= 1000 ? `${Math.round(n / 100) / 10}k` : `${n}`);
 
+/* Rank a command name against a lowercased query. Higher = better match;
+   -1 means no match. Empty query matches everything (base score). */
+function scoreCommand(query: string, name: string): number {
+  if (query === '') return 0;
+  if (name === query) return 1000;
+  if (name.startsWith(query)) return 800;
+  if (name.includes(query)) return 500;
+  // Subsequence: query chars appear in order within the name.
+  let qi = 0;
+  for (let ni = 0; ni < name.length && qi < query.length; ni++) {
+    if (name[ni] === query[qi]) qi++;
+  }
+  return qi === query.length ? 200 : -1;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
@@ -69,7 +76,6 @@ export default function RichInput({
   onSend,
   disabled = false,
   placeholder = 'How can I help you code today?',
-  skills,
   onAddSkill,
   mcpServers,
   onConnectMcp,
@@ -103,8 +109,23 @@ export default function RichInput({
 
   /* Slash command menu */
   const [cmdIndex, setCmdIndex] = useState(0);
-  const cmdQuery = value.startsWith('/') ? value.slice(1).split(' ')[0].toLowerCase() : null;
-  const cmdMatches = cmdQuery !== null ? commands.filter((c) => c.name.startsWith(cmdQuery)) : [];
+  // Only active while still typing the command token — null once a space is
+  // present, so the menu closes during the argument phase.
+  const cmdQuery =
+    value.startsWith('/') && !value.slice(1).includes(' ') ? value.slice(1).toLowerCase() : null;
+  const cmdMatches =
+    cmdQuery === null
+      ? []
+      : commands
+        .map((c) => ({ cmd: c, score: scoreCommand(cmdQuery, c.name.toLowerCase()) }))
+        .filter((m) => m.score >= 0)
+        .sort(
+          (a, b) =>
+            b.score - a.score ||
+            a.cmd.name.length - b.cmd.name.length ||
+            a.cmd.name.localeCompare(b.cmd.name),
+        )
+        .map((m) => m.cmd);
   useEffect(() => { setCmdIndex(0); }, [cmdQuery]);
 
   const runCommand = (cmd) => {
@@ -112,6 +133,13 @@ export default function RichInput({
     const arg = sp >= 0 ? value.slice(sp + 1).trim() || undefined : undefined;
     onChange('');
     cmd.run(arg);
+  };
+
+  /* Complete the command into the input (does not run it) so the user can
+     add an argument. Trailing space closes the menu via cmdQuery. */
+  const completeCommand = (cmd) => {
+    onChange(`/${cmd.name} `);
+    textareaRef.current?.focus();
   };
 
   const tryRunUnknownCommand = () => {
@@ -138,6 +166,7 @@ export default function RichInput({
       if (e.key === 'ArrowDown') { e.preventDefault(); setCmdIndex((i) => (i + 1) % cmdMatches.length); return; }
       if (e.key === 'ArrowUp') { e.preventDefault(); setCmdIndex((i) => (i - 1 + cmdMatches.length) % cmdMatches.length); return; }
       if (e.key === 'Escape') { e.preventDefault(); onChange(''); return; }
+      if (e.key === 'Tab') { e.preventDefault(); completeCommand(cmdMatches[Math.min(cmdIndex, cmdMatches.length - 1)]); return; }
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); runCommand(cmdMatches[Math.min(cmdIndex, cmdMatches.length - 1)]); return; }
     }
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -159,7 +188,7 @@ export default function RichInput({
             <div
               key={c.name}
               className={`ri-cmd-item ${i === cmdIndex ? 'ri-cmd-active' : ''}`}
-              onMouseDown={(e) => { e.preventDefault(); runCommand(c); }}
+              onMouseDown={(e) => { e.preventDefault(); completeCommand(c); }}
             >
               <span className="ri-cmd-name">/{c.name}</span>
               <span className="ri-cmd-desc">{c.description}</span>
@@ -187,16 +216,16 @@ export default function RichInput({
         <div className="ri-toolbar-left">
           {profiles.length > 0 && (
             <select
-                className="ri-toolbar-btn"
-                style={{ maxWidth: '160px', cursor: 'pointer' }}
-                value={activeProfileId ?? ''}
-                onChange={(e) => onSelectProfile(e.target.value)}
-                disabled={disabled && profiles.length < 2}
-                title="Switch model"
+              className="ri-toolbar-btn"
+              style={{ maxWidth: '160px', cursor: 'pointer' }}
+              value={activeProfileId ?? ''}
+              onChange={(e) => onSelectProfile(e.target.value)}
+              disabled={disabled && profiles.length < 2}
+              title="Switch model"
             >
-                {profiles.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
+              {profiles.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
             </select>
           )}
 
@@ -210,9 +239,6 @@ export default function RichInput({
             <Puzzle size={16} />
             <span className="ri-toolbar-btn-label">
               Skills
-              {skills.length > 0 && (
-                <span className="ri-badge">{skills.length}</span>
-              )}
             </span>
           </button>
 
