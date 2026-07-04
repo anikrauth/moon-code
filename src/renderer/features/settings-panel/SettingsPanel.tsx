@@ -1,7 +1,7 @@
 // @ts-nocheck
 import React, { useState } from 'react';
 import { Settings } from 'lucide-react';
-import { resolveLimits } from '../shared/lib/modelLimits';
+import { resolveLimits } from '@shared/lib/modelLimits';
 
 const providerOptions = [
   { label: 'OpenAI', defaultBase: '', defaultModel: 'gpt-4o' },
