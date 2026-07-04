@@ -11,7 +11,7 @@
 | **Agent loop** | Streaming LLM with full tool calling — one conversation turn can chain dozens of tool calls autonomously |
 | **File operations** | Read, write, edit, search, glob — all from the agent with workspace containment |
 | **Subagents** | Parallel child agents with their own tool access for multi-tasking |
-| **Skills system** | Plug-in working practices — bundled catalog + local `.moon/skills/` + marketplace + URL installation |
+| **Skills system** | Plug-in working practices — local `.moon/skills/` + `~/.moon/skills/` + marketplace + URL installation, progressively disclosed |
 | **MCP (Model Context Protocol)** | Connect any MCP server — filesystem, GitHub, fetch, puppeteer, databases — the agent gets their tools automatically |
 | **Session persistence** | Every chat turn auto-saves with full history, workspace, and token usage — browse and resume later |
 | **Multi-model profiles** | Unlimited model configs — OpenAI, Anthropic, OpenRouter, Zhipu GLM, Cloudflare, any OpenAI-compatible provider — with per-profile context window and output token overrides |
@@ -65,7 +65,7 @@ A fully native macOS window (hidden title bar, draggable background, blur effect
 | `widgets/overlay-modal/OverlayModal.tsx` | Generic modal wrapper used by every panel below |
 | `features/chat-input/RichInput.tsx` | Multi-line textarea with auto-resize, slash-command autocomplete, toolbar with model switcher, skill badges, MCP connection count, context chip, send/stop buttons |
 | `features/tool-chips/ToolChips.tsx` | Tool call/result chip rendering + turn summary cards |
-| `features/skills-panel/SkillsPanel.tsx` | Catalog of built-in working practices, discovered local skills, marketplace skills, create/install/URL-import buttons |
+| `features/skills-panel/SkillsPanel.tsx` | Discovered local skills (`.moon/skills`), marketplace skills, create/install/URL-import buttons |
 | `features/mcp-panel/McpPanel.tsx` | Server CRUD, connect/disconnect, built-in presets (Filesystem, GitHub, Memory, Fetch, Puppeteer, Sequential Thinking, custom) |
 | `features/settings-panel/SettingsPanel.tsx` | Multi-provider model profile management with per-profile overrides for context window and max output tokens |
 | `features/usage-panel/UsagePanel.tsx` | Real-time context window bar, session token counters, estimated cost calculation |
@@ -98,7 +98,7 @@ History compaction check ──── If context >75% of budget, summarize
 Project memory loaded (MOON.md)
     │
     ▼
-System prompt assembled (identity + project memory + active skills + discovered skills catalog + UI spec rules)
+System prompt assembled (identity + project memory + memory catalog + discovered skills catalog + UI spec rules)
     │
     ▼
 Tool set created ──── run_command, read_file, write_file, edit_file, list_dir,
@@ -142,10 +142,7 @@ Key design decisions:
 
 ## 🧩 Skills System
 
-Skills are reusable working practices that the agent follows. Three tiers:
-
-### Built-in Catalog (always available)
-Toggle 8 skills on/off from the UI — Code Review, TDD, Systematic Debugging, Refactoring, Git Discipline, Documentation, Plan First, Concise Output.
+Skills are reusable working practices that the agent follows. Two tiers:
 
 ### Local Skills (`.moon/skills/`)
 Drop a `SKILL.md` with YAML frontmatter into your project's `.moon/skills/` directory or `~/.moon/skills/` globally. The agent discovers them automatically and loads them on demand via the `skill` tool.
@@ -195,7 +192,7 @@ Every turn auto-saves to `{userData}/sessions/` with:
 - Token usage (input, output, cached, turns, context window info)
 - Timestamps (created, updated)
 
-Sessions are index-tracked (`index.json`) and browseable from the Sessions panel. Each session survives app restarts and can be resumed at any point.
+Sessions are index-tracked (`index.json`) and browseable from the task list in the left sidebar (`TaskSidebar.tsx`), grouped by workspace. Each session survives app restarts and can be resumed at any point.
 
 ---
 
