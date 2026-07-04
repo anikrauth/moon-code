@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { computeLineDiff } = require('../dist/main/diffStats.js');
+const { computeLineDiff } = require('../dist/main/features/diff/diffStats.js');
 
 test('identical content yields no change', () => {
   assert.deepStrictEqual(computeLineDiff('a\nb\nc\n', 'a\nb\nc\n'), { adds: 0, dels: 0 });

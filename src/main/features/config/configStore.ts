@@ -11,6 +11,13 @@ const emptyConfig = () => ({
     mcpServers: [],
 });
 
+// Bug #9 note: every mutating method here is fully synchronous end-to-end
+// today (load/persist are plain fs calls with no `await` between reading
+// and writing `config`), so there is no live race — two IPC calls can't
+// interleave mid-mutation because neither ever yields the event loop
+// mid-method. See `withLock` in main.ts (applied at the IPC-handler layer,
+// mirroring the renderer's `saveChainRef` pattern) for hardening against a
+// *future* regression where an `await` gets added between read and mutate.
 export function createConfigStore({ dir, safeStorage }) {
     const file = path.join(dir, 'config.json');
     let config = load();

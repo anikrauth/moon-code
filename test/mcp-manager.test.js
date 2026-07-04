@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const path = require('path');
-const { createMcpManager } = require('../dist/main/mcpManager.js');
+const { createMcpManager } = require('../dist/main/features/mcp/mcpManager.js');
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'echo-mcp-server.mjs');
 

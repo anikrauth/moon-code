@@ -28,6 +28,26 @@ function isFile(p) {
     try { return fs.statSync(p).isFile(); } catch { return false; }
 }
 
+// Resolve symlinks and verify the real path still lives inside the workspace.
+// Fixed config dirs like .cursor/rules/ can contain a symlink pointing outside
+// the workspace (e.g. to ~/.ssh or another project) — following it would leak
+// arbitrary filesystem contents into the LLM prompt via the @import mechanism.
+// Returns null for anything that escapes (or doesn't resolve at all).
+function realPathWithinWorkspace(workspace, absPath) {
+    let real;
+    let root;
+    try {
+        real = fs.realpathSync(absPath);
+        // Resolve the workspace root itself too: on macOS the system temp dir
+        // (and other paths) live under a symlink (/var -> /private/var), so
+        // comparing a realpath'd file against a merely path.resolve'd root
+        // would spuriously reject every legitimate file in the workspace.
+        root = fs.realpathSync(workspace);
+    } catch { return null; }
+    if (real !== root && !real.startsWith(root + path.sep)) return null;
+    return real;
+}
+
 function atomicWrite(file, data) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     const tmp = `${file}.tmp`;
@@ -44,10 +64,12 @@ function findAgentConfigs(workspace) {
             try { entries = fs.readdirSync(path.join(workspace, source)); } catch { continue; }
             for (const entry of entries.sort()) {
                 const rel = source + entry;
-                if (entry.endsWith('.md') && isFile(path.join(workspace, rel))) found.push(rel);
+                const abs = path.join(workspace, rel);
+                if (entry.endsWith('.md') && isFile(abs) && realPathWithinWorkspace(workspace, abs)) found.push(rel);
             }
-        } else if (isFile(path.join(workspace, source))) {
-            found.push(source);
+        } else {
+            const abs = path.join(workspace, source);
+            if (isFile(abs) && realPathWithinWorkspace(workspace, abs)) found.push(source);
         }
     }
     return found;

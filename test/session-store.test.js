@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { setTimeout: delay } = require('node:timers/promises');
-const { createSessionStore } = require('../dist/main/sessionStore.js');
+const { createSessionStore } = require('../dist/main/features/sessions/sessionStore.js');
 
 const tmpDir = (t) => {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'moon-sess-'));

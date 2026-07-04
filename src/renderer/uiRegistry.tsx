@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { defineRegistry } from '@json-render/react';
 import hljs from 'highlight.js';
-import { catalog } from '../shared/uiCatalog';
+import { catalog } from '../shared/config/uiCatalog';
 
 function CodeBlock({ props }) {
     const highlighted = props.language && hljs.getLanguage(props.language)

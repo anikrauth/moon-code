@@ -3,7 +3,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { createConfigStore } = require('../dist/main/configStore.js');
+const { createConfigStore } = require('../dist/main/features/config/configStore.js');
 
 const fakeSafeStorage = {
   isEncryptionAvailable: () => true,

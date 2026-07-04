@@ -39,6 +39,11 @@ export function createMemoryStore({ homeDir = os.homedir() } = {}) {
     // Replace @path tokens with the referenced file's contents. Recursive with a
     // depth cap, cycle guard (by resolved absolute path), and a total-size cap.
     // A missing file is left as the literal @token (Claude Code behavior).
+    // Cycle-safety note (re-verified, not a bug): `seen.add(abs)` below runs
+    // *before* the recursive resolveImports() call on that same file's
+    // contents, so a circular @import chain (A -> B -> A) is already
+    // correctly guarded — the second visit to A hits `seen.has(abs)` and
+    // returns the literal token instead of recursing forever.
     function resolveImports(text, baseDir, depth, seen, budget) {
         if (!text || depth > MAX_IMPORT_DEPTH) return text;
         return text.replace(/(^|\s)@([^\s]+)/g, (match, lead, ref) => {

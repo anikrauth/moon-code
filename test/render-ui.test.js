@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { startServer, textChunks, toolCallChunk, chunk, baseUrlOf } = require('./helpers/fake-openai');
 const { handlePrompt } = require('../dist/main/agent.js');
-const { parseRenderUiSpec } = require('../dist/shared/renderUiSpec.js');
+const { parseRenderUiSpec } = require('../dist/shared/lib/renderUiSpec.js');
 
 const VALID_JSONL = [
   '{"op":"add","path":"/root","value":"main"}',

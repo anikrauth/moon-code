@@ -3,8 +3,8 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { initWorkspace } = require('../dist/main/workspaceInit.js');
-const { createMemoryStore } = require('../dist/main/memoryStore.js');
+const { initWorkspace } = require('../dist/main/features/workspace/workspaceInit.js');
+const { createMemoryStore } = require('../dist/main/features/memory/memoryStore.js');
 
 function setup() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'moon-init-home-'));
@@ -76,4 +76,44 @@ test('existing MOON.md is left untouched while .moon is still created', () => {
 test('missing or empty workspace is a safe no-op', () => {
   assert.deepStrictEqual(initWorkspace(''), { created: false, sources: [] });
   assert.deepStrictEqual(initWorkspace(null), { created: false, sources: [] });
+});
+
+test('symlinked config file escaping the workspace is skipped (bug #5)', () => {
+  const { ws } = setup();
+  // A real file outside the workspace that must not be readable via @import.
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'moon-init-outside-'));
+  fs.writeFileSync(path.join(outside, 'secret.md'), 'top-secret-outside-content\n');
+
+  // Direct fixed-path config (.cursorrules) symlinked to an outside file.
+  fs.symlinkSync(path.join(outside, 'secret.md'), path.join(ws, '.cursorrules'));
+
+  // Directory-scanned config (.cursor/rules/) containing a symlinked .md file
+  // pointing outside the workspace.
+  fs.mkdirSync(path.join(ws, '.cursor', 'rules'), { recursive: true });
+  fs.symlinkSync(path.join(outside, 'secret.md'), path.join(ws, '.cursor', 'rules', 'escape.md'));
+  // A legitimate, non-symlinked file in the same directory should still be found.
+  fs.writeFileSync(path.join(ws, '.cursor', 'rules', 'legit.md'), 'legit-content\n');
+
+  const res = initWorkspace(ws);
+  assert.strictEqual(res.created, true);
+  assert.deepStrictEqual(res.sources, ['.cursor/rules/legit.md']);
+  assert.ok(!res.sources.includes('.cursorrules'));
+  assert.ok(!res.sources.includes('.cursor/rules/escape.md'));
+
+  const moonMd = fs.readFileSync(path.join(ws, 'MOON.md'), 'utf-8');
+  assert.doesNotMatch(moonMd, /@\.cursorrules/);
+  assert.doesNotMatch(moonMd, /@\.cursor\/rules\/escape\.md/);
+  assert.match(moonMd, /@\.cursor\/rules\/legit\.md/);
+
+  fs.rmSync(outside, { recursive: true, force: true });
+});
+
+test('symlink pointing within the workspace is still followed', () => {
+  const { ws } = setup();
+  fs.writeFileSync(path.join(ws, 'REAL.md'), 'real-content\n');
+  fs.symlinkSync(path.join(ws, 'REAL.md'), path.join(ws, 'CLAUDE.md'));
+
+  const res = initWorkspace(ws);
+  assert.strictEqual(res.created, true);
+  assert.deepStrictEqual(res.sources, ['CLAUDE.md']);
 });

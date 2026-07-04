@@ -3,7 +3,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { globToRegex, globSearch, grepSearch } = require('../dist/main/searchTools.js');
+const { globToRegex, globSearch, grepSearch } = require('../dist/main/features/search/searchTools.js');
 
 function fixture(t, files) {
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'moon-search-'));

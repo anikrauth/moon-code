@@ -3,8 +3,8 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { installSkillPackage, isValidSkillSpec } = require('../dist/main/skillInstaller.js');
-const { buildInvocableCatalog } = require('../dist/main/skillScanner.js');
+const { installSkillPackage, isValidSkillSpec } = require('../dist/main/features/skills/skillInstaller.js');
+const { buildInvocableCatalog } = require('../dist/main/features/skills/skillScanner.js');
 
 test('isValidSkillSpec accepts owner/repo and owner/repo@skill only', () => {
   assert.ok(isValidSkillSpec('vercel-labs/agent-skills'));
@@ -15,6 +15,24 @@ test('isValidSkillSpec accepts owner/repo and owner/repo@skill only', () => {
   assert.ok(!isValidSkillSpec('owner/repo; rm -rf /'));
   assert.ok(!isValidSkillSpec(''));
   assert.ok(!isValidSkillSpec(undefined));
+});
+
+test('isValidSkillSpec rejects "." / ".." path-traversal segments (bug #4)', () => {
+  // A bare "." satisfies the old [\w.-]+ shape regex as an owner or repo
+  // segment, letting npx treat the spec as a local relative path instead of
+  // a package name. The tightened regex (segments can't start with ".")
+  // plus the explicit owner/repo === "." / ".." reject must both catch these.
+  assert.ok(!isValidSkillSpec('./evil'));
+  assert.ok(!isValidSkillSpec('./evil@skill'));
+  assert.ok(!isValidSkillSpec('owner/.'));
+  assert.ok(!isValidSkillSpec('owner/..'));
+  assert.ok(!isValidSkillSpec('owner/.@skill'));
+  assert.ok(!isValidSkillSpec('./.'));
+  assert.ok(!isValidSkillSpec('.hidden/repo'));
+  assert.ok(!isValidSkillSpec('owner/.hidden'));
+  // Dots are still fine when not leading a segment.
+  assert.ok(isValidSkillSpec('my.org/my.repo'));
+  assert.ok(isValidSkillSpec('my.org/my.repo@v1.2.3'));
 });
 
 test('installSkillPackage rejects an invalid spec without spawning a process', async () => {

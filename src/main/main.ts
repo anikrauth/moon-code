@@ -4,16 +4,52 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { handlePrompt, forceCompact } from './agent';
-import { createConfigStore } from './configStore';
-import { createSessionStore } from './sessionStore';
-import { createMcpManager } from './mcpManager';
-import { scanSkills, buildInvocableCatalog } from './skillScanner';
-import { installSkillPackage } from './skillInstaller';
-import { memoryStore } from './memoryStore';
-import { initWorkspace } from './workspaceInit';
-import { createGitService } from './gitService';
+import { createConfigStore } from './features/config/configStore';
+import { createSessionStore } from './features/sessions/sessionStore';
+import { createMcpManager } from './features/mcp/mcpManager';
+import { scanSkills, buildInvocableCatalog } from './features/skills/skillScanner';
+import { installSkillPackage } from './features/skills/skillInstaller';
+import { memoryStore } from './features/memory/memoryStore';
+import { initWorkspace } from './features/workspace/workspaceInit';
+import { createGitService } from './features/git/gitService';
 
 app.name = 'Moon Code';
+
+// Atomically create `dir` iff it doesn't already exist, throwing the given
+// message if it does. Fixes a TOCTOU race across the skill-install call sites
+// below: a plain `existsSync` check followed by a separate `mkdirSync` call
+// left a window where two concurrent installs of the same skill name could
+// both pass the check and one silently clobber the other's directory.
+// `mkdirSync(dir, { recursive: false })` is atomic at the OS level and throws
+// EEXIST if the dir is already there, so we can turn that into the same
+// friendly error message instead. Parent dirs are ensured separately (with
+// `recursive: true`, which is idempotent and race-free) since the final
+// non-recursive mkdir requires the parent to already exist.
+function mkdirExclusive(dir: string, alreadyExistsMessage: string) {
+  fs.mkdirSync(path.dirname(dir), { recursive: true });
+  try {
+    fs.mkdirSync(dir, { recursive: false });
+  } catch (e: any) {
+    if (e && e.code === 'EEXIST') throw new Error(alreadyExistsMessage);
+    throw e;
+  }
+}
+
+// Bug #9 hardening: configStore/sessionStore handlers are fully synchronous
+// today (confirmed — no `await` sits between reading and mutating state in
+// either store), so there's no live race to fix. This serializes IPC calls
+// through a single promise chain anyway, mirroring the renderer's own
+// `saveChainRef` pattern (App.tsx), so that if a future change makes any
+// wrapped handler asynchronous mid-mutation, concurrent invocations still
+// can't interleave — they'll simply queue instead of corrupting state.
+function withLock<T extends (...args: any[]) => any>(fn: T): (...args: Parameters<T>) => Promise<ReturnType<T>> {
+  let chain: Promise<any> = Promise.resolve();
+  return (...args: Parameters<T>) => {
+    const run = chain.then(() => fn(...args));
+    chain = run.then(() => undefined, () => undefined);
+    return run;
+  };
+}
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -77,10 +113,14 @@ app.whenReady().then(() => {
 
   const configStore = createConfigStore({ dir: app.getPath('userData'), safeStorage });
 
-  const configHandler = (fn) => (_event, ...args) => {
+  // Shared lock across all config-mutating handlers below (not one per
+  // handler) so e.g. an upsertProfile and a setActiveProfile fired back to
+  // back are still serialized relative to each other, not just to themselves.
+  const runConfigMutation = withLock((fn: (...a: any[]) => void, args: any[]) => {
     try { fn(...args); } catch (e) { console.error('[config]', e); }
     return configStore.getRedacted();
-  };
+  });
+  const configHandler = (fn: (...a: any[]) => void) => (_event: any, ...args: any[]) => runConfigMutation(fn, args);
   ipcMain.handle('config:get', () => configStore.getRedacted());
   ipcMain.handle('config:upsertProfile', configHandler((profile, rawApiKey) => configStore.upsertProfile(profile, rawApiKey)));
   ipcMain.handle('config:deleteProfile', configHandler((id) => configStore.deleteProfile(id)));
@@ -102,10 +142,7 @@ app.whenReady().then(() => {
         ? path.join(os.homedir(), '.moon', 'skills')
         : path.join(workspace, '.moon', 'skills');
       const dir = path.join(base, name);
-      if (fs.existsSync(dir)) {
-        throw new Error(`Skill "${name}" already exists.`);
-      }
-      fs.mkdirSync(dir, { recursive: true });
+      mkdirExclusive(dir, `Skill "${name}" already exists.`);
       fs.writeFileSync(path.join(dir, 'SKILL.md'), content, 'utf-8');
       const skill = scanSkills(workspace).find((s) => s.id === name) ?? null;
       return { success: true, skill };
@@ -131,8 +168,7 @@ app.whenReady().then(() => {
         ? path.join(os.homedir(), '.moon', 'skills')
         : path.join(workspace, '.moon', 'skills');
       const targetDir = path.join(base, targetName);
-      if (fs.existsSync(targetDir)) throw new Error(`Skill "${targetName}" already exists.`);
-      fs.mkdirSync(targetDir, { recursive: true });
+      mkdirExclusive(targetDir, `Skill "${targetName}" already exists.`);
       fs.copyFileSync(skillFile, path.join(targetDir, 'SKILL.md'));
       const skill = scanSkills(workspace).find((s) => s.id === targetName) ?? null;
       return { success: true, skill };
@@ -141,7 +177,7 @@ app.whenReady().then(() => {
 
   ipcMain.handle('skills:installMarketplace', async (_e, skillId: string, workspace: string) => {
     try {
-      const { SKILL_MARKETPLACE } = require('../shared/skillMarketplace');
+      const { SKILL_MARKETPLACE } = require('../shared/config/skillMarketplace');
       const entry = SKILL_MARKETPLACE.find((s: any) => s.id === skillId);
       if (!entry) throw new Error(`Marketplace skill "${skillId}" not found.`);
       if (entry.source === 'bundled') {
@@ -182,8 +218,7 @@ app.whenReady().then(() => {
       const id = extractSkillId(content, url);
       const base = path.join(os.homedir(), '.moon', 'skills');
       const targetDir = path.join(base, id);
-      if (fs.existsSync(targetDir)) throw new Error(`Skill "${id}" already exists.`);
-      fs.mkdirSync(targetDir, { recursive: true });
+      mkdirExclusive(targetDir, `Skill "${id}" already exists.`);
       fs.writeFileSync(path.join(targetDir, 'SKILL.md'), content, 'utf-8');
       const skill = scanSkills(workspace).find((s) => s.id === id) ?? null;
       return { success: true, skill };
@@ -210,8 +245,7 @@ app.whenReady().then(() => {
   function copySkillToPersonal(skillFile: string, targetName: string, workspace: string) {
     const base = path.join(os.homedir(), '.moon', 'skills');
     const targetDir = path.join(base, targetName);
-    if (fs.existsSync(targetDir)) throw new Error(`Skill "${targetName}" already exists.`);
-    fs.mkdirSync(targetDir, { recursive: true });
+    mkdirExclusive(targetDir, `Skill "${targetName}" already exists.`);
     fs.copyFileSync(skillFile, path.join(targetDir, 'SKILL.md'));
     return scanSkills(workspace).find((s) => s.id === targetName) ?? null;
   }
@@ -226,11 +260,15 @@ app.whenReady().then(() => {
   ipcMain.handle('mcp:list', () => mcpListShape());
   ipcMain.handle('mcp:upsertServer', async (_e, def, rawSecrets) => {
       try {
+          // Persist first: if this throws, the running connection (if any)
+          // is left untouched and state can't desync. Previously disconnect
+          // ran first, so a persist failure left the server disconnected
+          // with its old config still on disk — a silent desync.
           const currentStatus = mcpManager.statuses()[def?.id]?.status;
+          configStore.upsertMcpServer(def, rawSecrets);
           if (def?.id && (currentStatus === 'connected' || currentStatus === 'connecting')) {
               await mcpManager.disconnect(def.id);
           }
-          configStore.upsertMcpServer(def, rawSecrets);
       } catch (e) { console.error('[mcp]', e); }
       return mcpListShape();
   });
@@ -256,22 +294,35 @@ app.whenReady().then(() => {
       return mcpListShape();
   });
 
-  for (const id of configStore.getConfig().connectedMcpIds) mcpManager.connect(id);
+  // Fire-and-forget: auto-connect previously-connected MCP servers at startup.
+  // Must not block window creation (already happened above), and a single
+  // server failing to connect must not crash the app via an unhandled
+  // rejection — allSettled + per-id catch covers both.
+  void Promise.allSettled(
+    configStore.getConfig().connectedMcpIds.map((id) =>
+      mcpManager.connect(id).catch((e) => console.error('[mcp] auto-connect failed', id, e))
+    )
+  );
 
   const sessionStore = createSessionStore({ dir: path.join(app.getPath('userData'), 'sessions') });
+  // Same #9 hardening as configHandler above: save/delete are the only
+  // mutators, shared through one lock so a save and a delete fired close
+  // together can't interleave mid-write of index.json.
+  const runSessionMutation = withLock((fn: () => any) => {
+    try { return fn(); } catch (e) { console.error('[sessions]', e); return undefined; }
+  });
   ipcMain.handle('sessions:list', () => {
     try { return sessionStore.listSessions(); } catch (e) { console.error('[sessions]', e); return []; }
   });
   ipcMain.handle('sessions:get', (_event, id: string) => {
     try { return sessionStore.getSession(id); } catch (e) { console.error('[sessions]', e); return null; }
   });
-  ipcMain.handle('sessions:save', (_event, snapshot: any) => {
-    try { return sessionStore.saveSession(snapshot); } catch (e) { console.error('[sessions]', e); return snapshot?.id ?? null; }
-  });
-  ipcMain.handle('sessions:delete', (_event, id: string) => {
-    try { sessionStore.deleteSession(id); } catch (e) { console.error('[sessions]', e); }
-    return sessionStore.listSessions();
-  });
+  ipcMain.handle('sessions:save', (_event, snapshot: any) =>
+    runSessionMutation(() => sessionStore.saveSession(snapshot)).then((r) => r ?? snapshot?.id ?? null)
+  );
+  ipcMain.handle('sessions:delete', (_event, id: string) =>
+    runSessionMutation(() => sessionStore.deleteSession(id)).then(() => sessionStore.listSessions())
+  );
 
   ipcMain.handle('workspace:init', (_event, workspace: string) => {
     try { return initWorkspace(workspace); }
@@ -346,9 +397,18 @@ app.whenReady().then(() => {
       });
     };
     const { skillsText, skillsCatalog } = buildInvocableCatalog(workspace);
+    // handlePrompt already has an internal try/catch that emits error+done on
+    // failure (defense-in-depth), but guard the call itself too: a rejection
+    // thrown before that internal try/catch runs (e.g. a synchronous throw
+    // during setup) would otherwise be an unhandled promise rejection here.
     handlePrompt(prompt, workspace, settings, history, (agentEvent) => {
       event.reply('agent:event', agentEvent);
-    }, requestPermission, activeTurn.signal, mcpManager.getAgentTools(), skillsText, meta, skillsCatalog);
+    }, requestPermission, activeTurn.signal, mcpManager.getAgentTools(), skillsText, meta, skillsCatalog)
+      .catch((e: any) => {
+        console.error('[agent]', e);
+        event.reply('agent:event', { type: 'error', agent: 'main', content: e?.message ?? String(e) });
+        event.reply('agent:event', { type: 'done' });
+      });
   });
 
   ipcMain.on('agent:permission-response', (_event, id: string, allow: boolean, alwaysAllow: boolean) => {

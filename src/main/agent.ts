@@ -4,7 +4,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { z } from 'zod';
 import * as fs from 'fs';
 import * as path from 'path';
-import { StatusLine } from './statusLine';
+import { StatusLine } from './features/status/statusLine';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 
@@ -15,13 +15,13 @@ const execAsync = promisify(exec);
 import * as dotenv from 'dotenv';
 dotenv.config();
 
-import { parseRenderUiSpec } from '../shared/renderUiSpec';
-import { globSearch, grepSearch } from './searchTools';
-import { resolveLimits } from '../shared/modelLimits';
-import { computeLineDiff } from './diffStats';
-import { buildInvocableCatalog } from './skillScanner';
-import { installSkillPackage } from './skillInstaller';
-import { memoryStore } from './memoryStore';
+import { parseRenderUiSpec } from '../shared/lib/renderUiSpec';
+import { globSearch, grepSearch } from './features/search/searchTools';
+import { resolveLimits } from '../shared/lib/modelLimits';
+import { computeLineDiff } from './features/diff/diffStats';
+import { buildInvocableCatalog } from './features/skills/skillScanner';
+import { installSkillPackage } from './features/skills/skillInstaller';
+import { memoryStore } from './features/memory/memoryStore';
 
 const MAX_HISTORY = 20;
 const KEEP_RECENT = 8;
@@ -452,18 +452,30 @@ function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpaw
             }
         });
         tools.set_progress = tool({
-            description: 'Track your plan for the current task so the user can follow along in the Progress panel. Call this at the START of any multi-step task with the goal and an ordered checklist of steps, then call it again whenever a step changes status. Keep exactly one step "active" at a time; mark finished steps "done". For trivial one-step requests, skip it.',
+            description: 'Track your plan for the current task so the user can follow along in the Progress panel. Call this at the START of any multi-step task with the goal and an ordered checklist of steps, then call it again whenever a step changes status. Keep exactly one step "active" at a time; mark finished steps "done". Reuse the exact same `id` for a given checklist item across every call — never reuse an id for a different step. For trivial one-step requests, skip it.',
             inputSchema: z.object({
                 goal: z.string().min(1).describe('One-line description of what the user asked for.'),
                 steps: z.array(z.object({
+                    id: z.string().min(1).optional().describe('Stable id for this step, e.g. "1", "2" — keep it identical across calls when only this step\'s status changes.'),
                     text: z.string().min(1).describe('Short imperative step description.'),
                     status: z.enum(['pending', 'active', 'done']).describe('pending = not started, active = in progress now, done = finished.'),
                 })).min(1).max(30).describe('Ordered checklist. Exactly one step should be "active".'),
             }),
             execute: async ({ goal, steps }) => {
+                // Bug #12: fall back to a positional id for any step the model
+                // left blank/duplicated, so the renderer always has a stable,
+                // unique key to diff against even if the model doesn't comply
+                // with the "reuse the same id" instruction above.
+                const seenIds = new Set<string>();
+                const normalizedSteps = steps.map((s: any, i: number) => {
+                    let id = typeof s.id === 'string' && s.id.trim() ? s.id : `step-${i}`;
+                    if (seenIds.has(id)) id = `step-${i}`;
+                    seenIds.add(id);
+                    return { ...s, id };
+                });
                 // No tool_call/tool_result events — progress drives a side panel,
                 // not the transcript, so it stays out of the chat chip stream.
-                emit({ type: 'progress', goal, steps });
+                emit({ type: 'progress', goal, steps: normalizedSteps });
                 return 'Progress updated.';
             }
         });
@@ -564,12 +576,16 @@ async function runAgentLoop({ prompt, workspace, settings, history, onEvent, req
     // tool-loop steps and only makes sense for session accounting.
     let lastStepUsage = null;
     let turnUsage = null;
+    let stepCount = 0;
+    let lastFinishReason = null;
     for await (const part of result.fullStream) {
         if (part.type === 'text-delta') {
             if (statusLine && part.textDelta) statusLine.addTokens(estimateTokens(part.textDelta));
             if (emitText) onEvent({ type: 'message', agent: agentId, content: part.text });
         } else if (part.type === 'finish-step') {
             lastStepUsage = part.usage;
+            lastFinishReason = part.finishReason;
+            stepCount += 1;
         } else if (part.type === 'finish') {
             turnUsage = part.totalUsage;
         } else if (part.type === 'error') {
@@ -588,7 +604,20 @@ async function runAgentLoop({ prompt, workspace, settings, history, onEvent, req
         contextPct,
     });
 
-    return { text: await result.text, responseMessages: await result.responseMessages, usage };
+    // Bug #11: `stopWhen: stepCountIs(MAX_STEPS)` and `maxOutputTokens` both
+    // let the stream finish normally (no 'error' part) when a turn is cut off
+    // mid-task — the loop just ends and `done` fires with no indication why,
+    // which from the user's side looks like the agent silently gave up.
+    // Surface the two truncation cases we can detect here: the last step's
+    // finishReason was 'length' (output cap hit), or the loop used every
+    // available step while the model still wanted to keep calling tools
+    // (finishReason 'tool-calls' at stepCount === MAX_STEPS means stopWhen cut
+    // it off, not the model choosing to stop).
+    let truncatedReason = null;
+    if (lastFinishReason === 'length') truncatedReason = 'output-limit';
+    else if (stepCount >= MAX_STEPS && lastFinishReason !== 'stop') truncatedReason = 'step-limit';
+
+    return { text: await result.text, responseMessages: await result.responseMessages, usage, truncatedReason };
 }
 
 export async function handlePrompt(
@@ -627,11 +656,18 @@ When structured data would read better as a widget — tables, file listings, si
             abortSignal, extraTools, limits, skillsCatalog: skillsCatalog ?? [],
         });
 
-        const statusLine = process.stdout.isTTY ? new StatusLine({ onInterrupt: () => abortSignal?.abort?.() }) : null;
-        statusLine?.start();
-
+        let statusLine: any = null;
         try {
-            const { responseMessages, usage } = await runAgentLoop({
+            // Construct + start inside the try so that if either throws (or
+            // anything below throws before completion), the catch/stop logic
+            // is guaranteed to run against a statusLine that was actually
+            // started — previously this happened before the try, so a throw
+            // during construction/start would leave a running status line
+            // that never got stopped.
+            statusLine = process.stdout.isTTY ? new StatusLine({ onInterrupt: () => abortSignal?.abort?.() }) : null;
+            statusLine?.start();
+
+            const { responseMessages, usage, truncatedReason } = await runAgentLoop({
                 prompt, workspace, settings, history, onEvent, requestPermission,
                 agentId: 'main', tools, systemPrompt, emitText: true, abortSignal, limits, statusLine,
             });
@@ -640,6 +676,16 @@ When structured data would read better as a widget — tables, file listings, si
             const newHistory = [...(history ?? []), userMsg, ...responseMessages];
 
             statusLine?.stop();
+            // Bug #11: tell the user explicitly when a turn was cut off by the
+            // step or output-token cap rather than the model choosing to stop —
+            // otherwise the turn just ends with no explanation, which looks
+            // like the agent silently died mid-task.
+            if (truncatedReason) {
+                const note = truncatedReason === 'output-limit'
+                    ? '\n\n_[Stopped: reached the output limit for this turn. Ask me to continue.]_'
+                    : '\n\n_[Stopped: reached the step limit for this turn. Ask me to continue.]_';
+                onEvent({ type: 'message', agent: 'main', content: note });
+            }
             onEvent({ type: 'done', history: newHistory, usage });
         } catch (error: any) {
             const cancelled = abortSignal?.aborted;

@@ -179,7 +179,7 @@ function ProgressSection({ progress }: any) {
       </div>
       <div className="rp-steps">
         {steps.map((s: any, i: number) => (
-          <div className={`rp-step ${s.status}`} key={i} style={{ '--i': i } as any}>
+          <div className={`rp-step ${s.status}`} key={s.id ?? i} style={{ '--i': i } as any}>
             <span className="rp-step-marker">
               {s.status === 'done' ? <Check size={12} /> : <span className="rp-step-dot" />}
             </span>

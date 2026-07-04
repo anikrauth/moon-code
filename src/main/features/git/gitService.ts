@@ -13,6 +13,12 @@ const MAX_BUFFER = 10 * 1024 * 1024;
 const UNTRACKED_SIZE_CAP = 5 * 1024 * 1024;
 
 export function createGitService({ execFileImpl = execFile } = {}) {
+    // Contract: run() intentionally never rejects — a failing/non-zero git
+    // invocation resolves with `err` set (plus whatever stdout/stderr it
+    // produced) instead of throwing. This is by design, not a bug: every
+    // caller in this file checks `result.err` explicitly before trusting
+    // stdout, so callers get uniform, non-throwing access to failures
+    // without try/catch at every call site. (Re-verified: not a live bug.)
     function run(cwd, args) {
         return new Promise((resolve) => {
             execFileImpl('git', args, { cwd, maxBuffer: MAX_BUFFER }, (err, stdout, stderr) => {

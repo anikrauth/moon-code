@@ -10,11 +10,11 @@ import SkillsPanel from './SkillsPanel';
 import McpPanel from './McpPanel';
 import SettingsPanel from './SettingsPanel';
 import UsagePanel from './UsagePanel';
-import { resolveLimits } from '../shared/modelLimits';
+import { resolveLimits } from '../shared/lib/modelLimits';
 import { JSONUIProvider, Renderer } from '@json-render/react';
 import { registry } from './uiRegistry';
 import { parseAssistantContent } from './parseAssistantContent';
-import { parseRenderUiSpec } from '../shared/renderUiSpec';
+import { parseRenderUiSpec } from '../shared/lib/renderUiSpec';
 import Markdown from './Markdown';
 import PermissionRequest from './PermissionRequest';
 

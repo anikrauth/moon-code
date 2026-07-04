@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { splitMarkdownBlocks, closeDanglingFence } = require('../dist/shared/markdownBlocks.js');
+const { splitMarkdownBlocks, closeDanglingFence } = require('../dist/shared/lib/markdownBlocks.js');
 
 const roundTrip = (md) => assert.strictEqual(splitMarkdownBlocks(md).join(''), md);
 
