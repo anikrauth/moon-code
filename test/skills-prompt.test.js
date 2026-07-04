@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { startServer, textChunks, toolCallChunk, chunk, baseUrlOf } = require('./helpers/fake-openai');
-const { handlePrompt } = require('../dist/main/agent.js');
+const { handlePrompt } = require('../dist/main/features/agent/index.js');
 
 const SKILLS_TEXT = 'ACTIVE SKILLS — follow these working practices:\n\nTest-Driven:\nAlways write the failing test first.';
 

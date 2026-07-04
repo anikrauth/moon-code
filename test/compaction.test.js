@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { startServer, textChunks, baseUrlOf } = require('./helpers/fake-openai');
-const { handlePrompt } = require('../dist/main/agent.js');
+const { handlePrompt } = require('../dist/main/features/agent/index.js');
 
 const longHistory = () => Array.from({ length: 25 }, (_, i) => ({
   role: i % 2 ? 'assistant' : 'user', content: `turn ${i}` }));

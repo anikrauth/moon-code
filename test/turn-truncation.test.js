@@ -6,7 +6,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { startServer, chunk, toolCallChunk, textChunks, baseUrlOf } = require('./helpers/fake-openai');
-const { handlePrompt } = require('../dist/main/agent.js');
+const { handlePrompt } = require('../dist/main/features/agent/index.js');
 
 async function runTurn(server) {
   const events = [];

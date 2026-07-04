@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { startServer, textChunks, toolCallChunk, chunk, baseUrlOf } = require('./helpers/fake-openai');
-const { handlePrompt } = require('../dist/main/agent.js');
+const { handlePrompt } = require('../dist/main/features/agent/index.js');
 
 test('set_progress emits a progress event, no tool_call/tool_result chip', async (t) => {
   const steps = [

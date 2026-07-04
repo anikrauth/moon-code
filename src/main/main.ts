@@ -3,7 +3,7 @@ import { app, BrowserWindow, ipcMain, dialog, safeStorage, shell } from 'electro
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { handlePrompt, forceCompact } from './agent';
+import { handlePrompt, forceCompact } from './features/agent';
 import { createConfigStore } from './features/config/configStore';
 import { createSessionStore } from './features/sessions/sessionStore';
 import { createMcpManager } from './features/mcp/mcpManager';

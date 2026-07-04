@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { startServer, textChunks, toolCallChunk, chunk, baseUrlOf } = require('./helpers/fake-openai');
-const { handlePrompt } = require('../dist/main/agent.js');
+const { handlePrompt } = require('../dist/main/features/agent/index.js');
 
 test('parallel subagents: gated, tagged, no recursion, results returned', { timeout: 10000 }, async (t) => {
   const server = await startServer((body) => {

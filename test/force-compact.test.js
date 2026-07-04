@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { startServer, textChunks, baseUrlOf } = require('./helpers/fake-openai');
-const { forceCompact } = require('../dist/main/agent.js');
+const { forceCompact } = require('../dist/main/features/agent/index.js');
 
 const smallHistory = (n) => Array.from({ length: n }, (_, i) => ({
   role: i % 2 ? 'assistant' : 'user', content: `turn ${i}` }));

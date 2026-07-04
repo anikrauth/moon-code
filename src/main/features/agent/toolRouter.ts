@@ -1,44 +1,30 @@
 // @ts-nocheck
-import { streamText, tool, stepCountIs, generateText, jsonSchema } from 'ai';
-import { createOpenAI } from '@ai-sdk/openai';
+import { tool, jsonSchema } from 'ai';
 import { z } from 'zod';
 import * as fs from 'fs';
 import * as path from 'path';
-import { StatusLine } from './features/status/statusLine';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 
 const execAsync = promisify(exec);
 
-// In a real app, this should be set securely via UI or local config file.
-// For now, we assume process.env.OPENAI_API_KEY is set or passed in.
-import * as dotenv from 'dotenv';
-dotenv.config();
+import { parseRenderUiSpec } from '../../../shared/lib/renderUiSpec';
+import { globSearch, grepSearch } from '../search/searchTools';
+import { computeLineDiff } from '../diff/diffStats';
+import { buildInvocableCatalog } from '../skills/skillScanner';
+import { installSkillPackage } from '../skills/skillInstaller';
+import { memoryStore } from '../memory/memoryStore';
+// Circular with agentLoop.ts: spawn_agent's execute() calls runAgentLoop to
+// drive a subagent turn, and agentLoop.ts's handlePrompt calls makeTools to
+// build the main agent's tools. Both references are only used inside
+// callbacks invoked well after module load, so the cycle resolves fine at
+// runtime — do not hoist either call to module-evaluation time.
+import { runAgentLoop } from './agentLoop';
 
-import { parseRenderUiSpec } from '../shared/lib/renderUiSpec';
-import { globSearch, grepSearch } from './features/search/searchTools';
-import { resolveLimits } from '../shared/lib/modelLimits';
-import { computeLineDiff } from './features/diff/diffStats';
-import { buildInvocableCatalog } from './features/skills/skillScanner';
-import { installSkillPackage } from './features/skills/skillInstaller';
-import { memoryStore } from './features/memory/memoryStore';
-
-const MAX_HISTORY = 20;
-const KEEP_RECENT = 8;
-// Rough allowance for the system prompt + tool schemas when only a chars/4
-// estimate of the history is available (no real usage reported yet).
-const SYSTEM_OVERHEAD_EST = 4000;
-const estimateTokens = (s) => Math.ceil(s.length / 4);
-const historyTokens = (history) => history.reduce((sum, m) =>
-    sum + estimateTokens(typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '')), 0);
-const TRANSCRIPT_CHAR_LIMIT = 30000;
-const MEMORY_FILE = 'MOON.md';
-const MEMORY_CHAR_LIMIT = 12000;
 const TOOL_OUTPUT_CHAR_LIMIT = 30000;
 const READ_DEFAULT_LINES = 2000;
 const READ_CHAR_LIMIT = 50000;
 const LIST_DIR_MAX_ENTRIES = 500;
-const MAX_STEPS = 50;
 
 /* Hand-written instead of catalog.prompt(): the generated prompt is ~14 KB of
    state/bindings/actions machinery this static catalog never uses. Keep this
@@ -57,7 +43,7 @@ Available components (props):
 - CodeBlock {code: string, language: string|null}
 Rules: every element needs "type", "props", "children" ([] when empty). Do not invent component types. If the tool returns an error, fix the spec and call it again.`;
 
-function truncateOutput(text, limit = TOOL_OUTPUT_CHAR_LIMIT) {
+export function truncateOutput(text, limit = TOOL_OUTPUT_CHAR_LIMIT) {
     if (text.length <= limit) return text;
     const head = Math.floor(limit * 0.8);
     const tail = Math.floor(limit * 0.1);
@@ -65,79 +51,14 @@ function truncateOutput(text, limit = TOOL_OUTPUT_CHAR_LIMIT) {
     return `${text.slice(0, head)}\n[... truncated ${removed} chars ...]\n${text.slice(-tail)}`;
 }
 
-function resolveInWorkspace(workspace, relPath) {
+export function resolveInWorkspace(workspace, relPath) {
     const root = path.resolve(workspace);
     const abs = path.resolve(root, relPath);
     if (abs !== root && !abs.startsWith(root + path.sep)) return null;
     return abs;
 }
 
-function sliceHistory(history) {
-    let cutIndex = Math.max(0, history.length - MAX_HISTORY);
-    while (cutIndex < history.length && history[cutIndex].role === 'tool') cutIndex++;
-    return history.slice(cutIndex);
-}
-
-// The token budget is derived from the model's context window: reserve room for
-// the response (capped at a quarter of the window so huge-output models don't eat
-// it), then compact once the estimated prompt exceeds 75% of what remains.
-// Known limitation: the kept KEEP_RECENT tail is not itself token-bounded, so a
-// tail of large capped tool results can exceed the budget and re-trigger
-// compaction on consecutive turns. The Math.max(2, ...) cut floor guarantees at
-// least two messages are summarized per pass, so this converges and never loops.
-// lastInputTokens (real usage observed on the previous turn) is only consulted
-// for the trigger and never re-checked after compaction within a turn, so a
-// stale value cannot cause a loop either.
-async function compactHistory(history, settings, onEvent, abortSignal, force = false, limits, lastInputTokens) {
-    if (!history || history.length <= 2) return history;
-    limits = limits ?? resolveLimits(settings?.model, settings);
-    const reserve = Math.min(limits.maxOutputTokens, Math.floor(limits.contextWindow * 0.25));
-    const budget = Math.floor(0.75 * (limits.contextWindow - reserve));
-    const promptTokens = (Number.isFinite(lastInputTokens) && lastInputTokens > 0)
-        ? lastInputTokens
-        : historyTokens(history) + SYSTEM_OVERHEAD_EST;
-    if (!force && history.length <= MAX_HISTORY && promptTokens <= budget) return history;
-    let cut = Math.max(2, history.length - KEEP_RECENT);
-    while (cut < history.length && history[cut].role === 'tool') cut++;
-    const old = history.slice(0, cut);
-    const recent = history.slice(cut);
-    try {
-        onEvent({ type: 'status', agent: 'main', content: 'Compacting history…' });
-        const transcript = old.map(m =>
-            `${m.role}: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`
-        ).join('\n').slice(-TRANSCRIPT_CHAR_LIMIT);
-        const customOpenAI = createOpenAI({ apiKey: settings.apiKey, baseURL: settings.baseUrl || undefined });
-        const { text } = await generateText({
-            model: customOpenAI.chat(settings.model || 'gpt-4o'),
-            system: 'Summarize the conversation compactly. Preserve file paths, decisions made, code changes, and unresolved tasks.',
-            prompt: `Conversation to summarize:\n${transcript}`,
-            maxRetries: 1,
-            abortSignal,
-        });
-        return [{ role: 'user', content: `[Earlier conversation summary]\n${text}` }, ...recent];
-    } catch {
-        return sliceHistory(history);
-    } finally {
-        onEvent({ type: 'status', agent: 'main', content: null });
-    }
-}
-
-export async function forceCompact(history, settings, onEvent) {
-    return compactHistory(history, settings, onEvent, undefined, true);
-}
-
-// Load both instruction layers (global ~/.moon/MOON.md + project MOON.md, with
-// @imports resolved) plus the learned-fact index for prompt injection.
-function loadMemory(workspace: string): { global: string; project: string; catalog: { name: string; description: string; scope: string }[] } {
-    try {
-        const { global, project } = memoryStore.loadInstructions(workspace);
-        return { global, project, catalog: memoryStore.buildMemoryCatalog(workspace) };
-    } catch {
-        return { global: '', project: '', catalog: [] };
-    }
-}
-
-function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpawn, settings, spawnState, abortSignal, extraTools, limits, skillsCatalog }) {
+export function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpawn, settings, spawnState, abortSignal, extraTools, limits, skillsCatalog }) {
     const emit = (e) => onEvent({ agent: agentId, ...e });
     const denied = (name) => {
         const res = 'User denied permission for this action.';
@@ -532,169 +453,4 @@ ${spawnState.skillsText ? `\n${spawnState.skillsText}\n` : ''}`;
         }
     }
     return tools;
-}
-
-// ai@7 usage numbers are all optional and provider-dependent; normalize in one
-// place. Returns null when the provider reported nothing usable so callers can
-// fall back to estimates instead of trusting zeros.
-function normalizeUsage(u) {
-    if (!u) return null;
-    if (u.inputTokens == null && u.outputTokens == null && u.totalTokens == null) return null;
-    const inputTokens = u.inputTokens ?? 0;
-    const outputTokens = u.outputTokens ?? 0;
-    return {
-        inputTokens,
-        outputTokens,
-        cachedInputTokens: u.inputTokenDetails?.cacheReadTokens ?? 0,
-        totalTokens: u.totalTokens ?? (inputTokens + outputTokens),
-    };
-}
-
-async function runAgentLoop({ prompt, workspace, settings, history, onEvent, requestPermission, agentId, tools, systemPrompt, emitText, abortSignal, limits, statusLine }: any) {
-    const customOpenAI = createOpenAI({
-        apiKey: settings.apiKey,
-        baseURL: settings.baseUrl || undefined,
-    });
-    limits = limits ?? resolveLimits(settings?.model, settings);
-    const userMsg = { role: 'user', content: prompt };
-    // System content belongs in the `system` option, never in `messages` — the
-    // provider rejects system-role turns here. Strip any that slipped into
-    // history (e.g. from older builds) so a stale message can't break a send.
-    const priorMessages = (history ?? []).filter((m: any) => m?.role !== 'system');
-    const result = streamText({
-        model: customOpenAI.chat(settings.model || 'gpt-4o'),
-        system: systemPrompt,
-        messages: [...priorMessages, userMsg],
-        tools,
-        abortSignal,
-        maxOutputTokens: limits.maxOutputTokens,
-        stopWhen: stepCountIs(MAX_STEPS),
-    });
-
-    // Context fullness comes from the LAST step's usage (the prompt size of the
-    // final model call); 'finish' totalUsage sums input tokens across all
-    // tool-loop steps and only makes sense for session accounting.
-    let lastStepUsage = null;
-    let turnUsage = null;
-    let stepCount = 0;
-    let lastFinishReason = null;
-    for await (const part of result.fullStream) {
-        if (part.type === 'text-delta') {
-            if (statusLine && part.textDelta) statusLine.addTokens(estimateTokens(part.textDelta));
-            if (emitText) onEvent({ type: 'message', agent: agentId, content: part.text });
-        } else if (part.type === 'finish-step') {
-            lastStepUsage = part.usage;
-            lastFinishReason = part.finishReason;
-            stepCount += 1;
-        } else if (part.type === 'finish') {
-            turnUsage = part.totalUsage;
-        } else if (part.type === 'error') {
-            throw part.error instanceof Error ? part.error : new Error(String(part.error));
-        }
-    }
-
-    const usage = { total: normalizeUsage(turnUsage), lastStep: normalizeUsage(lastStepUsage) };
-    const contextPct = usage.lastStep && limits.contextWindow > 0
-        ? Math.min(1, (usage.lastStep.inputTokens + usage.lastStep.outputTokens) / limits.contextWindow)
-        : null;
-    onEvent({
-        type: 'usage', agent: agentId,
-        usage: usage.total, lastStep: usage.lastStep,
-        limits: { contextWindow: limits.contextWindow, maxOutputTokens: limits.maxOutputTokens },
-        contextPct,
-    });
-
-    // Bug #11: `stopWhen: stepCountIs(MAX_STEPS)` and `maxOutputTokens` both
-    // let the stream finish normally (no 'error' part) when a turn is cut off
-    // mid-task — the loop just ends and `done` fires with no indication why,
-    // which from the user's side looks like the agent silently gave up.
-    // Surface the two truncation cases we can detect here: the last step's
-    // finishReason was 'length' (output cap hit), or the loop used every
-    // available step while the model still wanted to keep calling tools
-    // (finishReason 'tool-calls' at stepCount === MAX_STEPS means stopWhen cut
-    // it off, not the model choosing to stop).
-    let truncatedReason = null;
-    if (lastFinishReason === 'length') truncatedReason = 'output-limit';
-    else if (stepCount >= MAX_STEPS && lastFinishReason !== 'stop') truncatedReason = 'step-limit';
-
-    return { text: await result.text, responseMessages: await result.responseMessages, usage, truncatedReason };
-}
-
-export async function handlePrompt(
-    prompt: string,
-    workspace: string,
-    settings: any,
-    history: any[] | undefined,
-    onEvent: (event: any) => void,
-    requestPermission: (name: string, args: any, agentId: string) => Promise<boolean>,
-    abortSignal?: AbortSignal,
-    extraTools?: any,
-    skillsText?: string,
-    usageHint?: { lastInputTokens?: number; skillContent?: string },
-    skillsCatalog?: { id: string; description: string; content: string }[],
-) {
-    try {
-        const limits = resolveLimits(settings?.model, settings);
-        history = await compactHistory(history, settings, onEvent, abortSignal, false, limits, usageHint?.lastInputTokens);
-
-        const { global: globalMemory, project: projectMemory, catalog: memoryCatalog } = loadMemory(workspace);
-
-        const systemPrompt = `You are Moon Code, an advanced coding agentic IDE for Mac. You have full access to the user's workspace at ${workspace}. You must use tools to accomplish the user's requests autonomously. Do NOT wait for the user if you can figure it out. Answer concisely. Use grep_search and glob_search to find code instead of running grep or find through run_command.
-${globalMemory ? `\nUSER INSTRUCTIONS (global, from ~/.moon/MOON.md — apply to every project):\n${globalMemory}\n` : ''}
-${projectMemory ? `\nPROJECT INSTRUCTIONS (from ${MEMORY_FILE} in the workspace root — follow these):\n${projectMemory}\n` : ''}
-${memoryCatalog.length ? `\nMEMORY (facts you saved earlier — call read_memory to load a fact's full detail before relying on it; call write_memory to persist durable new facts):\n${memoryCatalog.map((f) => `- ${f.name} [${f.scope}] — ${f.description}`).join('\n')}\n` : ''}
-${skillsText ? `\n${skillsText}\n` : ''}
-${usageHint?.skillContent ? `\nACTIVE SKILL — the user explicitly invoked a skill. Follow these instructions for this task:\n${usageHint.skillContent}\n` : ''}
-For any task that takes more than one step, call set_progress at the start with the goal and an ordered checklist, then call it again as steps move to done — keep exactly one step active. Skip it for trivial one-step requests.
-Format answers in GitHub-flavored Markdown (headings, lists, fenced code blocks with language tags).
-When structured data would read better as a widget — tables, file listings, side-by-side comparisons, small dashboards — call the render_ui tool instead of writing a markdown table, then continue in normal markdown. Never paste raw JSON UI specs into your prose.`;
-
-        const tools = makeTools({
-            workspace, onEvent, requestPermission, agentId: 'main',
-            includeSpawn: true, settings,
-            spawnState: { counter: 0, projectMemory, globalMemory, memoryCatalog, skillsText: skillsText ?? '', skillsCatalog: skillsCatalog ?? [] },
-            abortSignal, extraTools, limits, skillsCatalog: skillsCatalog ?? [],
-        });
-
-        let statusLine: any = null;
-        try {
-            // Construct + start inside the try so that if either throws (or
-            // anything below throws before completion), the catch/stop logic
-            // is guaranteed to run against a statusLine that was actually
-            // started — previously this happened before the try, so a throw
-            // during construction/start would leave a running status line
-            // that never got stopped.
-            statusLine = process.stdout.isTTY ? new StatusLine({ onInterrupt: () => abortSignal?.abort?.() }) : null;
-            statusLine?.start();
-
-            const { responseMessages, usage, truncatedReason } = await runAgentLoop({
-                prompt, workspace, settings, history, onEvent, requestPermission,
-                agentId: 'main', tools, systemPrompt, emitText: true, abortSignal, limits, statusLine,
-            });
-
-            const userMsg = { role: 'user', content: prompt };
-            const newHistory = [...(history ?? []), userMsg, ...responseMessages];
-
-            statusLine?.stop();
-            // Bug #11: tell the user explicitly when a turn was cut off by the
-            // step or output-token cap rather than the model choosing to stop —
-            // otherwise the turn just ends with no explanation, which looks
-            // like the agent silently died mid-task.
-            if (truncatedReason) {
-                const note = truncatedReason === 'output-limit'
-                    ? '\n\n_[Stopped: reached the output limit for this turn. Ask me to continue.]_'
-                    : '\n\n_[Stopped: reached the step limit for this turn. Ask me to continue.]_';
-                onEvent({ type: 'message', agent: 'main', content: note });
-            }
-            onEvent({ type: 'done', history: newHistory, usage });
-        } catch (error: any) {
-            const cancelled = abortSignal?.aborted;
-            statusLine?.stop(cancelled ? 'Interrupted.' : undefined);
-            throw error;
-        }
-    } catch (error: any) {
-        const cancelled = abortSignal?.aborted;
-        onEvent({ type: 'error', agent: 'main', content: cancelled ? 'Cancelled.' : error.message });
-        onEvent({ type: 'done' });
-    }
 }
