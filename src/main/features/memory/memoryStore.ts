@@ -50,7 +50,12 @@ export function createMemoryStore({ homeDir = os.homedir() } = {}) {
             if (budget.left <= 0) return match;
             let target = ref;
             if (target.startsWith('~/')) target = path.join(homeDir, target.slice(2));
-            const abs = path.isAbsolute(target) ? target : path.resolve(baseDir, target);
+            const lexical = path.isAbsolute(target) ? target : path.resolve(baseDir, target);
+            // Key the cycle guard on the realpath: a symlinked alias of an
+            // already-imported file must count as the same file, otherwise
+            // A -> A-link -> A only stops at the depth cap.
+            let abs;
+            try { abs = fs.realpathSync(lexical); } catch { return match; }
             if (seen.has(abs)) return match; // cycle
             let content;
             try { content = fs.readFileSync(abs, 'utf-8'); } catch { return match; }
@@ -65,7 +70,9 @@ export function createMemoryStore({ homeDir = os.homedir() } = {}) {
     function loadInstruction(file, baseDir) {
         const raw = readText(file);
         if (!raw) return '';
-        const resolved = resolveImports(raw, baseDir, 0, new Set([path.resolve(file)]), { left: IMPORT_TOTAL_LIMIT });
+        let self;
+        try { self = fs.realpathSync(file); } catch { self = path.resolve(file); }
+        const resolved = resolveImports(raw, baseDir, 0, new Set([self]), { left: IMPORT_TOTAL_LIMIT });
         return resolved.trim().slice(0, MEMORY_CHAR_LIMIT);
     }
 

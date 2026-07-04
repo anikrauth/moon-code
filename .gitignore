@@ -6,3 +6,5 @@ graphify-out/
 .env.local
 *.log
 .superpowers/
+.DS_Store
+.moon/scratch/

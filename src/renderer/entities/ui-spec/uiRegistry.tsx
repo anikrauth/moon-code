@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { defineRegistry } from '@json-render/react';
-import hljs from 'highlight.js';
+import hljs from '@shared/lib/highlight';
 import { catalog } from '@shared/config/uiCatalog';
 
 function CodeBlock({ props }) {
@@ -24,7 +24,7 @@ export const { registry } = defineRegistry(catalog, {
             const Tag = props.ordered ? 'ol' : 'ul';
             return (
                 <Tag style={{ margin: 0, paddingLeft: '20px' }}>
-                    {props.items.map((item, i) => <li key={i}>{item}</li>)}
+                    {props.items.map((item, i) => <li key={`${i}-${item}`}>{item}</li>)}
                 </Tag>
             );
         },
@@ -33,7 +33,7 @@ export const { registry } = defineRegistry(catalog, {
                 <thead>
                     <tr>
                         {props.headers.map((h, i) => (
-                            <th key={i} style={{ textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.2)', padding: '6px 10px' }}>{h}</th>
+                            <th key={`${i}-${h}`} style={{ textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.2)', padding: '6px 10px' }}>{h}</th>
                         ))}
                     </tr>
                 </thead>

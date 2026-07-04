@@ -55,10 +55,32 @@ export function resolveInWorkspace(workspace, relPath) {
     const root = path.resolve(workspace);
     const abs = path.resolve(root, relPath);
     if (abs !== root && !abs.startsWith(root + path.sep)) return null;
-    return abs;
+    // Lexical check alone is not enough: a symlink inside the workspace can
+    // point anywhere on disk. Realpath the deepest existing ancestor (the
+    // target itself may not exist yet, e.g. write_file creating it) and
+    // re-check containment against the realpath'd root — same defense as
+    // realPathWithinWorkspace() in workspaceInit.ts, extended to not-yet-
+    // existing paths.
+    let realRoot;
+    try { realRoot = fs.realpathSync(root); } catch { return null; }
+    let probe = abs;
+    let suffix = '';
+    for (;;) {
+        let real;
+        try { real = fs.realpathSync(probe); } catch {
+            const parent = path.dirname(probe);
+            if (parent === probe) return null;
+            suffix = suffix ? path.join(path.basename(probe), suffix) : path.basename(probe);
+            probe = parent;
+            continue;
+        }
+        const resolved = suffix ? path.join(real, suffix) : real;
+        if (resolved !== realRoot && !resolved.startsWith(realRoot + path.sep)) return null;
+        return abs;
+    }
 }
 
-export function makeTools({ workspace, onEvent, requestPermission, agentId, includeSpawn, settings, spawnState, abortSignal, extraTools, limits, skillsCatalog }) {
+export function makeTools({ workspace, onEvent, requestPermission, requestQuestion, agentId, includeSpawn, settings, spawnState, abortSignal, extraTools, limits, skillsCatalog }) {
     const emit = (e) => onEvent({ agent: agentId, ...e });
     const denied = (name) => {
         const res = 'User denied permission for this action.';
@@ -398,6 +420,28 @@ export function makeTools({ workspace, onEvent, requestPermission, agentId, incl
                 // not the transcript, so it stays out of the chat chip stream.
                 emit({ type: 'progress', goal, steps: normalizedSteps });
                 return 'Progress updated.';
+            }
+        });
+        tools.ask_user = tool({
+            description: 'Ask the user a clarifying question before proceeding, when a request is genuinely ambiguous (e.g. more than one plausible way to change a calculation/formula). Give 2-4 concrete, labeled options describing what each would do. Call this BEFORE editing any code affected by the ambiguity — do not guess and fix it up after. Not for routine confirmations; use only when the interpretations would produce meaningfully different results.',
+            inputSchema: z.object({
+                question: z.string().min(1).describe('The question to ask, including what you found in the code that makes it ambiguous.'),
+                options: z.array(z.object({
+                    label: z.string().min(1).describe('Short option title, e.g. "New Payable formula".'),
+                    description: z.string().min(1).describe('One sentence explaining what choosing this option means.'),
+                })).min(2).max(4).describe('Concrete, mutually exclusive interpretations for the user to pick from.'),
+            }),
+            execute: async ({ question, options }) => {
+                emit({ type: 'tool_call', name: 'ask_user', arguments: JSON.stringify({ question, options }) });
+                if (!requestQuestion) {
+                    const res = 'No user-question channel available — proceed with your best judgment and state the assumption you made.';
+                    emit({ type: 'tool_result', name: 'ask_user', result: res });
+                    return res;
+                }
+                const answer = await requestQuestion(question, options, agentId);
+                const res = answer ? `User chose: ${answer}` : 'User skipped the question — proceed with your best judgment and state the assumption you made.';
+                emit({ type: 'tool_result', name: 'ask_user', result: res });
+                return res;
             }
         });
         tools.spawn_agent = tool({

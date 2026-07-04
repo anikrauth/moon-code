@@ -72,7 +72,9 @@ test('list_dir rejects .. but accepts .', async (t) => {
   const rejected = await runTool(t, ws, { name: 'list_dir', args: { dirPath: '..' } });
   assert.strictEqual(rejected, 'Error: path escapes the workspace: ..');
   const ok = await runTool(t, ws, { name: 'list_dir', args: { dirPath: '.' } });
-  assert.strictEqual(ok, 'a.txt');
+  // Filter the .moon/.gitignore bootstrap that ensureScratchDir() creates each turn.
+  const entries = ok.split('\n').filter((e) => e !== '.moon' && e !== '.gitignore');
+  assert.deepStrictEqual(entries, ['a.txt']);
 });
 
 test('legit inner paths still work', async (t) => {

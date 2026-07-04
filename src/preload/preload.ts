@@ -5,10 +5,12 @@ contextBridge.exposeInMainWorld('electron', {
   selectSkill: () => ipcRenderer.invoke('dialog:openSkill'),
   sendPrompt: (prompt: string, workspace: string, profileId: string, history: any, meta?: { lastInputTokens?: number; skillContent?: string }) => ipcRenderer.send('agent:prompt', prompt, workspace, profileId, history, meta),
   respondPermission: (id: string, allow: boolean, alwaysAllow: boolean) => ipcRenderer.send('agent:permission-response', id, allow, alwaysAllow),
+  respondQuestion: (id: string, answer: string | null) => ipcRenderer.send('agent:question-response', id, answer),
   cancelPrompt: () => ipcRenderer.send('agent:cancel'),
   onAgentEvent: (callback: (event: any) => void) => {
-    ipcRenderer.removeAllListeners('agent:event');
-    ipcRenderer.on('agent:event', (_event, value) => callback(value));
+    const handler = (_event: Electron.IpcRendererEvent, value: any) => callback(value);
+    ipcRenderer.on('agent:event', handler);
+    return () => ipcRenderer.removeListener('agent:event', handler);
   },
   getConfig: () => ipcRenderer.invoke('config:get'),
   upsertProfile: (profile: any, rawApiKey?: string) => ipcRenderer.invoke('config:upsertProfile', profile, rawApiKey),
@@ -21,6 +23,8 @@ contextBridge.exposeInMainWorld('electron', {
   deleteSession: (id: string) => ipcRenderer.invoke('sessions:delete', id),
   initWorkspace: (workspace: string) =>
     ipcRenderer.invoke('workspace:init', workspace) as Promise<{ created: boolean; sources: string[] }>,
+  openFile: (workspace: string, relPath: string, line?: number) =>
+    ipcRenderer.invoke('workspace:openFile', workspace, relPath, line) as Promise<{ ok: boolean; error?: string }>,
   gitSnapshot: (workspace: string) => ipcRenderer.invoke('git:snapshot', workspace),
   gitCheckout: (workspace: string, branch: string) =>
     ipcRenderer.invoke('git:checkout', workspace, branch) as Promise<{ ok: boolean; error?: string }>,
@@ -37,8 +41,9 @@ contextBridge.exposeInMainWorld('electron', {
   connectMcp: (id: string) => ipcRenderer.invoke('mcp:connect', id),
   disconnectMcp: (id: string) => ipcRenderer.invoke('mcp:disconnect', id),
   onMcpEvent: (callback: (event: any) => void) => {
-    ipcRenderer.removeAllListeners('mcp:event');
-    ipcRenderer.on('mcp:event', (_event, value) => callback(value));
+    const handler = (_event: Electron.IpcRendererEvent, value: any) => callback(value);
+    ipcRenderer.on('mcp:event', handler);
+    return () => ipcRenderer.removeListener('mcp:event', handler);
   },
   compactNow: (profileId: string, history: any) => ipcRenderer.invoke('agent:compact', profileId, history),
   discoverSkills: (workspace: string) => ipcRenderer.invoke('skills:discover', workspace),
