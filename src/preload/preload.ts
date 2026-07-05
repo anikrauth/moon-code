@@ -3,7 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 contextBridge.exposeInMainWorld('electron', {
   selectFolder: () => ipcRenderer.invoke('dialog:openDirectory'),
   selectSkill: () => ipcRenderer.invoke('dialog:openSkill'),
-  sendPrompt: (prompt: string, workspace: string, profileId: string, history: any, meta?: { lastInputTokens?: number; skillContent?: string }) => ipcRenderer.send('agent:prompt', prompt, workspace, profileId, history, meta),
+  sendPrompt: (prompt: string, workspace: string, profileId: string, history: any, meta?: { lastInputTokens?: number; skillContent?: string; sessionId?: string }) => ipcRenderer.send('agent:prompt', prompt, workspace, profileId, history, meta),
   respondPermission: (id: string, allow: boolean, alwaysAllow: boolean) => ipcRenderer.send('agent:permission-response', id, allow, alwaysAllow),
   respondQuestion: (id: string, answer: string | null) => ipcRenderer.send('agent:question-response', id, answer),
   cancelPrompt: () => ipcRenderer.send('agent:cancel'),
@@ -30,6 +30,8 @@ contextBridge.exposeInMainWorld('electron', {
     ipcRenderer.invoke('git:checkout', workspace, branch) as Promise<{ ok: boolean; error?: string }>,
   gitCommit: (workspace: string, message: string) =>
     ipcRenderer.invoke('git:commit', workspace, message) as Promise<{ ok: boolean; hash?: string; error?: string }>,
+  gitGenerateCommitMessage: (workspace: string, profileId: string) =>
+    ipcRenderer.invoke('git:generate-commit-message', workspace, profileId) as Promise<{ ok: boolean; message?: string; error?: string }>,
   appendMemory: (scope: 'project' | 'global', text: string, workspace: string) =>
     ipcRenderer.invoke('memory:append', scope, text, workspace) as Promise<{ ok: boolean; error?: string }>,
   listMemory: (workspace: string) => ipcRenderer.invoke('memory:list', workspace),

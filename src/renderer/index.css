@@ -1712,9 +1712,10 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
 }
 .rp-file-stat { display: inline-flex; gap: 6px; flex-shrink: 0; }
 .rp-commit { display: flex; flex-direction: column; gap: 8px; }
+.rp-commit-input-wrap { position: relative; width: 100%; }
 .rp-commit-input {
   width: 100%;
-  padding: 7px 10px;
+  padding: 7px 32px 7px 10px;
   background: var(--surface-center);
   border: 1px solid var(--divider);
   border-radius: var(--radius-md);
@@ -1724,6 +1725,16 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
   box-sizing: border-box;
 }
 .rp-commit-input:focus { outline: none; border-color: var(--accent-color); }
+.rp-commit-gen-btn {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0;
+  background: transparent; border: none; border-radius: var(--radius-sm);
+  color: var(--text-secondary); cursor: pointer;
+  transition: color 0.15s var(--ease-out), background 0.15s var(--ease-out);
+}
+.rp-commit-gen-btn:hover:not(:disabled) { color: var(--accent-color); background: var(--surface-hover); }
+.rp-commit-gen-btn:disabled { opacity: 0.5; cursor: default; }
 .rp-commit-btn {
   display: flex; align-items: center; justify-content: center; gap: 7px;
   padding: 7px 10px;

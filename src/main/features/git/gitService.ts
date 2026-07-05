@@ -11,6 +11,9 @@ const MAX_BUFFER = 10 * 1024 * 1024;
 // Untracked files aren't in `git diff --numstat`; we count their lines
 // ourselves but skip anything huge or binary.
 const UNTRACKED_SIZE_CAP = 5 * 1024 * 1024;
+// Change summaries feed an LLM prompt; keep them well under context limits.
+const DIFF_CHAR_BUDGET = 24_000;
+const UNTRACKED_CONTENT_CAP = 4_000;
 
 export function createGitService({ execFileImpl = execFile } = {}) {
     // Contract: run() intentionally never rejects — a failing/non-zero git
@@ -148,5 +151,60 @@ export function createGitService({ execFileImpl = execFile } = {}) {
         return { ok: true, hash: sha.err ? undefined : sha.stdout.trim() };
     }
 
-    return { snapshot, checkout, commit };
+    // Text summary of everything a commit would include (`git add -A` stages
+    // all working-tree changes, so untracked files must be represented too —
+    // they never appear in `diff HEAD`).
+    async function changesSummary(workspace) {
+        const status = await run(workspace, ['status', '--porcelain']);
+        if (status.err) return { ok: false, error: (status.stderr || status.err.message || 'git status failed').trim() };
+        if (!status.stdout.trim()) return { ok: false, error: 'No changes to commit.' };
+
+        const untracked = [];
+        for (const line of status.stdout.split('\n')) {
+            if (!line.trim()) continue;
+            if (line.slice(0, 2) !== '??') continue;
+            let p = line.slice(3);
+            if (p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1);
+            untracked.push(p);
+        }
+
+        const hasHead = !(await run(workspace, ['rev-parse', '--verify', '-q', 'HEAD'])).err;
+        let diff = '';
+        if (hasHead) {
+            const diffRes = await run(workspace, ['diff', 'HEAD']);
+            if (!diffRes.err) diff = diffRes.stdout;
+        }
+        if (diff.length > DIFF_CHAR_BUDGET) {
+            diff = diff.slice(0, DIFF_CHAR_BUDGET) + '\n[diff truncated]';
+        }
+
+        const parts = [];
+        if (diff.trim()) parts.push(`Diff of tracked changes:\n${diff}`);
+        if (untracked.length > 0) {
+            let remaining = DIFF_CHAR_BUDGET;
+            const lines = [];
+            for (const p of untracked) {
+                const counted = countUntrackedLines(workspace, p);
+                lines.push(counted.binary ? `- ${p} (binary)` : `- ${p} (${counted.adds} lines)`);
+                if (!counted.binary && remaining > 0) {
+                    try {
+                        const content = fs.readFileSync(path.join(workspace, p), 'utf8');
+                        const capped = content.slice(0, Math.min(UNTRACKED_CONTENT_CAP, remaining));
+                        remaining -= capped.length;
+                        lines.push('```');
+                        lines.push(capped.endsWith('\n') ? capped.slice(0, -1) : capped);
+                        if (capped.length < content.length) lines.push('[truncated]');
+                        lines.push('```');
+                    } catch { /* unreadable file: the list entry above is enough */ }
+                }
+            }
+            parts.push(`Untracked (new) files:\n${lines.join('\n')}`);
+        }
+        // Fallback (e.g. files staged in a repo with no HEAD yet): at least
+        // give the model the porcelain status list.
+        if (parts.length === 0) parts.push(`Changed files (git status):\n${status.stdout.trim()}`);
+        return { ok: true, summary: parts.join('\n\n') };
+    }
+
+    return { snapshot, checkout, commit, changesSummary };
 }

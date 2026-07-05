@@ -8,3 +8,4 @@ graphify-out/
 .superpowers/
 .DS_Store
 .moon/scratch/
+.moon/state.json

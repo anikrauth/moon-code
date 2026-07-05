@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState } from 'react';
-import { GitCommit, RefreshCw, Target, ListChecks, Check, FileText } from 'lucide-react';
+import { GitCommit, RefreshCw, Target, ListChecks, Check, FileText, Sparkles, Loader2 } from 'lucide-react';
 
 function fmtTokens(n: number): string {
   if (!n) return '0';
@@ -19,9 +19,10 @@ function fmtElapsed(ms: number): string {
   return `${h}h ${m % 60}m`;
 }
 
-function GitSection({ git, loading, workspace, onRefresh, onCommit }: any) {
+function GitSection({ git, loading, workspace, onRefresh, onCommit, onGenerateMessage }: any) {
   const [msg, setMsg] = useState('');
   const [committing, setCommitting] = useState(false);
+  const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const doCommit = async () => {
@@ -32,6 +33,16 @@ function GitSection({ git, loading, workspace, onRefresh, onCommit }: any) {
     setCommitting(false);
     if (res?.ok) { setMsg(''); }
     else setError(res?.error ?? 'Commit failed.');
+  };
+
+  const doGenerate = async () => {
+    if (generating || committing) return;
+    setGenerating(true);
+    setError(null);
+    const res = await onGenerateMessage();
+    setGenerating(false);
+    if (res?.ok && res.message) setMsg(res.message);
+    else setError(res?.error ?? 'Could not generate a commit message.');
   };
 
   let body: React.ReactNode;
@@ -86,13 +97,24 @@ function GitSection({ git, loading, workspace, onRefresh, onCommit }: any) {
         )}
         {files.length > 0 && (
           <div className="rp-commit">
-            <input
-              className="rp-commit-input"
-              placeholder="Commit message…"
-              value={msg}
-              onChange={(e) => setMsg(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') doCommit(); }}
-            />
+            <div className="rp-commit-input-wrap">
+              <input
+                className="rp-commit-input"
+                placeholder="Commit message…"
+                value={msg}
+                onChange={(e) => setMsg(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') doCommit(); }}
+              />
+              <button
+                className="rp-commit-gen-btn"
+                title="Generate commit message"
+                aria-label="Generate commit message"
+                disabled={generating || committing}
+                onClick={doGenerate}
+              >
+                {generating ? <Loader2 size={13} className="rp-spin" /> : <Sparkles size={13} />}
+              </button>
+            </div>
             <button className="rp-commit-btn" disabled={!msg.trim() || committing} onClick={doCommit}>
               <GitCommit size={13} />
               {committing ? 'Committing…' : 'Commit'}

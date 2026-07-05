@@ -86,7 +86,7 @@ app.whenReady().then(() => {
   registerWorkspaceIpc();
 
   const gitService = createGitService();
-  registerGitIpc({ gitService });
+  registerGitIpc({ gitService, configStore });
 
   registerMemoryIpc();
 

@@ -29,4 +29,11 @@ export const SKILL_MARKETPLACE: MarketplaceSkill[] = [
     source: 'bundled',
     bundledPath: 'marketplace-skills/cli-creator/SKILL.md',
   },
+  {
+    id: 'structured-investigation',
+    name: 'Structured Investigation',
+    description: 'Bug-fix methodology: trace data flow to the source, reuse existing predicates, fix all sibling sites, audit sentinel fallout.',
+    source: 'bundled',
+    bundledPath: 'marketplace-skills/structured-investigation/SKILL.md',
+  },
 ];

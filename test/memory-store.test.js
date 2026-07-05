@@ -68,6 +68,38 @@ test('fact names are validated against path traversal', () => {
   assert.throws(() => store.writeFact('project', ws, { name: 'Bad Name', description: 'x', body: 'y' }));
 });
 
+test('deleteFact removes the fact file and its index entry', () => {
+  const { ws, store } = setup();
+  store.writeFact('project', ws, { name: 'stale-fact', description: 'old', body: 'x' });
+  store.writeFact('project', ws, { name: 'keep-fact', description: 'keep', body: 'y' });
+  assert.strictEqual(store.deleteFact('project', ws, 'stale-fact'), 'project');
+  assert.strictEqual(store.readFact('project', ws, 'stale-fact'), null);
+  assert.deepStrictEqual(store.listFacts('project', ws).map((f) => f.name), ['keep-fact']);
+});
+
+test('deleteFact with null scope searches project then global', () => {
+  const { ws, store } = setup();
+  store.writeFact('global', ws, { name: 'global-fact', description: 'g', body: 'z' });
+  assert.strictEqual(store.deleteFact(null, ws, 'global-fact'), 'global');
+  assert.strictEqual(store.readFact(null, ws, 'global-fact'), null);
+});
+
+test('deleteFact returns null for unknown names and leaves the index untouched', () => {
+  const { ws, store } = setup();
+  store.writeFact('project', ws, { name: 'keep-fact', description: 'keep', body: 'y' });
+  assert.strictEqual(store.deleteFact('project', ws, 'nope'), null);
+  assert.strictEqual(store.deleteFact(null, ws, '../evil'), null);
+  assert.deepStrictEqual(store.listFacts('project', ws).map((f) => f.name), ['keep-fact']);
+});
+
+test('deleteFact cleans a dangling index entry whose file is already gone', () => {
+  const { ws, store } = setup();
+  store.writeFact('project', ws, { name: 'ghost', description: 'gone', body: 'x' });
+  fs.unlinkSync(path.join(ws, '.moon', 'memory', 'ghost.md'));
+  assert.strictEqual(store.deleteFact('project', ws, 'ghost'), 'project');
+  assert.deepStrictEqual(store.listFacts('project', ws), []);
+});
+
 test('appendInstruction creates the file then appends bullet lines', () => {
   const { ws, store } = setup();
   store.appendInstruction('project', ws, 'always use tabs');
