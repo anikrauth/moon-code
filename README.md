@@ -260,6 +260,22 @@ npm run build
 npm test
 ```
 
+### 🍎 macOS: first launch
+
+The macOS build is not yet code-signed or Apple-notarized, so after downloading the `.dmg` through a browser, macOS quarantines the app and Gatekeeper shows:
+
+> **"Moon Code" is damaged and can't be opened. You should move it to the Trash.**
+
+The app is **not** damaged — this is only Gatekeeper blocking an unsigned download. After dragging **Moon Code** to `/Applications`, run this once in Terminal to clear the quarantine flag:
+
+```bash
+xattr -cr "/Applications/Moon Code.app"
+```
+
+Then open the app normally. This is a one-time step per install. (Right-click → **Open** does **not** clear a "damaged" verdict — only removing the quarantine attribute does.)
+
+> The dialog will disappear entirely once builds are signed with a Developer ID certificate and notarized.
+
 ---
 
 ## 📁 Project Structure

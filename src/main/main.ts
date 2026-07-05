@@ -19,7 +19,10 @@ app.name = 'Moon Code';
 
 let mainWindow: BrowserWindow | null = null;
 
-const appIconPath = path.join(__dirname, '../../build/icon.png');
+const appIconPath = path.join(
+  __dirname,
+  process.platform === 'win32' ? '../../build/icon.ico' : '../../build/icon.png'
+);
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -27,7 +30,9 @@ function createWindow() {
     height: 900,
     minWidth: 1100,
     minHeight: 640,
-    titleBarStyle: 'hiddenInset',
+    // hiddenInset is macOS-only; Windows/Linux keep the standard frame so
+    // their native window controls render correctly.
+    ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const } : {}),
     icon: appIconPath,
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),

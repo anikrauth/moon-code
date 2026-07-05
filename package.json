@@ -1,6 +1,6 @@
 {
   "name": "moon-code",
-  "version": "1.0.7",
+  "version": "1.0.07",
   "description": "Moon Code — AI coding agent desktop app",
   "main": "dist/main/main.js",
   "scripts": {
@@ -8,12 +8,15 @@
     "dev:electron": "wait-on http://localhost:5173 && tsc && electron dist/main/main.js",
     "dev": "concurrently \"npm run dev:vite\" \"npm run dev:electron\"",
     "build": "vite build && tsc -p tsconfig.main.json && electron-builder",
+    "build:win": "vite build && tsc -p tsconfig.main.json && electron-builder --win",
+    "build:mac": "vite build && tsc -p tsconfig.main.json && electron-builder --mac",
+    "build:linux": "vite build && tsc -p tsconfig.main.json && electron-builder --linux",
     "build:main": "tsc -p tsconfig.main.json",
     "test": "npm run build:main && node --test test/*.test.js",
     "lint": "tsc --noEmit"
   },
   "keywords": [],
-  "author": "",
+  "author": "anikrauth <anikrouthwebdev@gmail.com>",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
@@ -46,14 +49,37 @@
   "build": {
     "appId": "com.mooncode.desktop",
     "productName": "Moon Code",
-    "icon": "build/icon.png",
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "build"
     },
     "files": [
       "dist/**/*",
       "marketplace-skills/**/*",
       "package.json"
-    ]
+    ],
+    "mac": {
+      "icon": "build/icon.png",
+      "target": [
+        { "target": "dmg", "arch": ["arm64", "x64"] }
+      ],
+      "category": "public.app-category.developer-tools"
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "target": ["AppImage", "deb"],
+      "category": "Development"
+    }
   }
 }
