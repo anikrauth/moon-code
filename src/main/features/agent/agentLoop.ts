@@ -17,8 +17,19 @@ import { loadMemory, buildSystemPrompt } from './systemPrompt';
 import { makeTools } from './toolRouter';
 import { ensureScratchDir } from '../workspace/scratchDir';
 import { ensurePlansDir } from '../workspace/plansDir';
+import { saveWorkspaceState, buildResumeContext } from '../workspace/workspaceState';
 
 const MAX_STEPS = 50;
+
+// End-of-turn memory nudge (F4): when a turn changed files but saved nothing to
+// memory, ride a user-role <system-reminder> into the next turn's history —
+// system-role messages are stripped from history (see runAgentLoop), and the
+// renderer round-trips history verbatim, so this is the only durable channel
+// to the model's next turn. Consumed nudges are filtered out of the next
+// newHistory so they never accumulate.
+const MEMORY_NUDGE_MARK = 'Automatic end-of-turn memory check';
+const MEMORY_NUDGE = `<system-reminder>${MEMORY_NUDGE_MARK}: you changed files or made decisions last turn without saving anything to memory. If a durable user preference, correction (with the why), or project decision surfaced, persist it now with write_memory — reuse an existing fact's name to update it. If nothing durable surfaced, do not call write_memory and do not mention this reminder.</system-reminder>`;
+const isMemoryNudge = (m) => m?.role === 'user' && typeof m?.content === 'string' && m.content.includes(MEMORY_NUDGE_MARK);
 
 // ai@7 usage numbers are all optional and provider-dependent; normalize in one
 // place. Returns null when the provider reported nothing usable so callers can
@@ -122,16 +133,41 @@ export async function handlePrompt(
 ) {
     try {
         const limits = resolveLimits(settings?.model, settings);
+        // Capture freshness from the RAW history — compactHistory reassigns it.
+        const freshSession = !history || history.length === 0;
         history = await compactHistory(history, settings, onEvent, abortSignal, false, limits, usageHint?.lastInputTokens);
 
         const { global: globalMemory, project: projectMemory, catalog: memoryCatalog } = loadMemory(workspace);
         const scratchDir = ensureScratchDir(workspace);
         const plansDir = ensurePlansDir(workspace);
 
-        const systemPrompt = buildSystemPrompt({ workspace, scratchDir, plansDir, globalMemory, projectMemory, memoryCatalog, skillsText, usageHint });
+        // Workspace state (.moon/state.json) must never fail a turn.
+        let previousState = null;
+        if (freshSession) {
+            try { previousState = buildResumeContext(workspace); } catch { /* best-effort */ }
+        }
+
+        const systemPrompt = buildSystemPrompt({ workspace, scratchDir, plansDir, globalMemory, projectMemory, memoryCatalog, skillsText, usageHint, previousState });
+
+        // Single wrap point for main-agent + subagent events: tracks whether
+        // this turn edited files / saved memory (end-of-turn nudge), and
+        // mirrors the main agent's set_progress into .moon/state.json.
+        const sessionId = usageHint?.sessionId ?? null;
+        let sawEdit = false;
+        let sawMemoryWrite = false;
+        const wrappedOnEvent = (e) => {
+            if (e?.type === 'tool_call') {
+                if (e.name === 'write_file' || e.name === 'edit_file') sawEdit = true;
+                if (e.name === 'write_memory') sawMemoryWrite = true;
+            }
+            if (e?.type === 'progress' && (e.agent ?? 'main') === 'main') {
+                try { saveWorkspaceState(workspace, { sessionId, goal: e.goal, steps: e.steps }); } catch { /* never break the turn */ }
+            }
+            onEvent(e);
+        };
 
         const tools = makeTools({
-            workspace, onEvent, requestPermission, requestQuestion, agentId: 'main',
+            workspace, onEvent: wrappedOnEvent, requestPermission, requestQuestion, agentId: 'main',
             includeSpawn: true, settings,
             spawnState: { counter: 0, projectMemory, globalMemory, memoryCatalog, skillsText: skillsText ?? '', skillsCatalog: skillsCatalog ?? [] },
             abortSignal, extraTools, limits, skillsCatalog: skillsCatalog ?? [],
@@ -149,12 +185,16 @@ export async function handlePrompt(
             statusLine?.start();
 
             const { responseMessages, usage, truncatedReason } = await runAgentLoop({
-                prompt, workspace, settings, history, onEvent, requestPermission,
+                prompt, workspace, settings, history, onEvent: wrappedOnEvent, requestPermission,
                 agentId: 'main', tools, systemPrompt, emitText: true, abortSignal, limits, statusLine,
             });
 
             const userMsg = { role: 'user', content: prompt };
-            const newHistory = [...(history ?? []), userMsg, ...responseMessages];
+            // Drop any nudge the model consumed this turn (delivered exactly
+            // once), then append a fresh one if this turn earned it.
+            const newHistory = [...(history ?? []).filter((m) => !isMemoryNudge(m)), userMsg, ...responseMessages];
+            if (sawEdit && !sawMemoryWrite) newHistory.push({ role: 'user', content: MEMORY_NUDGE });
+            try { saveWorkspaceState(workspace, { sessionId, lastPrompt: prompt.slice(0, 200) }); } catch { /* never break the turn */ }
 
             statusLine?.stop();
             // Bug #11: tell the user explicitly when a turn was cut off by the

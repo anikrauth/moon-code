@@ -146,3 +146,66 @@ test('commit with empty message is rejected', async () => {
   assert.strictEqual(res.ok, false);
   assert.match(res.error, /message/i);
 });
+
+test('changesSummary on clean repo reports no changes', async () => {
+  const dir = tmpDir('cs-clean');
+  initRepo(dir);
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'x\n');
+  commitAll(dir, 'init');
+  const res = await git.changesSummary(dir);
+  assert.strictEqual(res.ok, false);
+  assert.match(res.error, /No changes/);
+});
+
+test('changesSummary includes diff hunks for modified tracked files', async () => {
+  const dir = tmpDir('cs-mod');
+  initRepo(dir);
+  fs.writeFileSync(path.join(dir, 'f.txt'), 'alpha\nbeta\n');
+  commitAll(dir, 'init');
+  fs.writeFileSync(path.join(dir, 'f.txt'), 'alpha\ngamma\n');
+  const res = await git.changesSummary(dir);
+  assert.strictEqual(res.ok, true);
+  assert.match(res.summary, /Diff of tracked changes:/);
+  assert.match(res.summary, /\+gamma/);
+  assert.match(res.summary, /-beta/);
+});
+
+test('changesSummary lists untracked files with contents', async () => {
+  const dir = tmpDir('cs-untracked');
+  initRepo(dir);
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'x\n');
+  commitAll(dir, 'init');
+  fs.writeFileSync(path.join(dir, 'new.js'), 'console.log("brand new file");\n');
+  const res = await git.changesSummary(dir);
+  assert.strictEqual(res.ok, true);
+  assert.match(res.summary, /Untracked \(new\) files:/);
+  assert.match(res.summary, /- new\.js \(1 lines\)/);
+  assert.match(res.summary, /brand new file/);
+});
+
+test('changesSummary works in a fresh repo with no commits', async () => {
+  const dir = tmpDir('cs-fresh');
+  initRepo(dir);
+  fs.writeFileSync(path.join(dir, 'first.txt'), 'hello\n');
+  const res = await git.changesSummary(dir);
+  assert.strictEqual(res.ok, true);
+  assert.doesNotMatch(res.summary, /Diff of tracked changes:/);
+  assert.match(res.summary, /- first\.txt \(1 lines\)/);
+});
+
+test('changesSummary truncates huge diffs to the budget', async () => {
+  const hugeDiff = 'diff --git a/x b/x\n' + '+x\n'.repeat(20000); // > 24K chars
+  const fakeGit = createGitService({
+    execFileImpl: (_cmd, args, _opts, cb) => {
+      const key = args.join(' ');
+      if (key === 'status --porcelain') return cb(null, ' M x\n', '');
+      if (key.startsWith('rev-parse --verify')) return cb(null, 'abc123\n', '');
+      if (key === 'diff HEAD') return cb(null, hugeDiff, '');
+      cb(null, '', '');
+    },
+  });
+  const res = await fakeGit.changesSummary('/whatever');
+  assert.strictEqual(res.ok, true);
+  assert.match(res.summary, /\[diff truncated\]$/);
+  assert.ok(res.summary.length < 25000, `summary too long: ${res.summary.length}`);
+});

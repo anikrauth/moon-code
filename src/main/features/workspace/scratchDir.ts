@@ -7,19 +7,21 @@ import * as path from 'path';
 
 const GITIGNORE_ENTRY = '.moon/scratch/';
 
-function ensureGitignoreEntry(workspace) {
+// Idempotent: appends `entry` to the workspace .gitignore unless an exact line
+// already exists. Shared by scratchDir and workspaceState.
+export function ensureGitignoreEntry(workspace, entry) {
     const gitignorePath = path.join(workspace, '.gitignore');
     let existing = '';
     try { existing = fs.readFileSync(gitignorePath, 'utf-8'); } catch { /* no .gitignore yet */ }
-    if (existing.split('\n').some((line) => line.trim() === GITIGNORE_ENTRY)) return;
+    if (existing.split('\n').some((line) => line.trim() === entry)) return;
     const sep = existing.length && !existing.endsWith('\n') ? '\n' : '';
-    fs.writeFileSync(gitignorePath, `${existing}${sep}${GITIGNORE_ENTRY}\n`, 'utf-8');
+    fs.writeFileSync(gitignorePath, `${existing}${sep}${entry}\n`, 'utf-8');
 }
 
 // Idempotent: safe to call every turn. Returns the absolute scratch dir path.
 export function ensureScratchDir(workspace) {
     const dir = path.join(workspace, '.moon', 'scratch');
     fs.mkdirSync(dir, { recursive: true });
-    ensureGitignoreEntry(workspace);
+    ensureGitignoreEntry(workspace, GITIGNORE_ENTRY);
     return dir;
 }

@@ -5,13 +5,19 @@
 // `message` event noting why the turn stopped before `done` fires.
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { startServer, chunk, toolCallChunk, textChunks, baseUrlOf } = require('./helpers/fake-openai');
 const { handlePrompt } = require('../dist/main/features/agent/index.js');
 
 async function runTurn(server) {
   const events = [];
+  // Tmp workspace: the step-cap test spams set_progress, which now mirrors
+  // goal/steps into <workspace>/.moon/state.json — keep that out of the repo.
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'moon-trunc-ws-'));
   await new Promise((resolve) => {
-    handlePrompt('go', process.cwd(), { apiKey: 'k', baseUrl: baseUrlOf(server), model: 'mock' }, undefined,
+    handlePrompt('go', ws, { apiKey: 'k', baseUrl: baseUrlOf(server), model: 'mock' }, undefined,
       (e) => { events.push(e); if (e.type === 'done') resolve(); }, async () => true);
   });
   return events;

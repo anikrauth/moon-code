@@ -26,6 +26,21 @@ test('skillsText lands in the main system prompt; absent when empty', async (t) 
   assert.ok(!sys2.includes('ACTIVE SKILLS'));
 });
 
+test('BUG-FIX TRIGGER appears only when structured-investigation is in the catalog', async (t) => {
+  const server = await startServer(() => textChunks('ok'));
+  t.after(() => server.close());
+  await run(server, 'AVAILABLE SKILLS:\n- structured-investigation: bug-fix methodology');
+  const sys1 = server.requests[0].messages.find((m) => m.role === 'system').content;
+  assert.ok(sys1.includes('BUG-FIX TRIGGER'));
+  assert.ok(sys1.includes('`structured-investigation`'));
+  await run(server, SKILLS_TEXT);
+  const sys2 = server.requests[1].messages.find((m) => m.role === 'system').content;
+  assert.ok(!sys2.includes('BUG-FIX TRIGGER'), 'no trigger when skill not installed');
+  await run(server, '');
+  const sys3 = server.requests[2].messages.find((m) => m.role === 'system').content;
+  assert.ok(!sys3.includes('BUG-FIX TRIGGER'), 'no trigger when skillsText empty');
+});
+
 test('subagent system prompt also carries skillsText', { timeout: 15000 }, async (t) => {
   const server = await startServer((body) => {
     const isMain = (body.tools ?? []).some((x) => x.function.name === 'spawn_agent');

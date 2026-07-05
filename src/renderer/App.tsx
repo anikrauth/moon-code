@@ -436,6 +436,12 @@ export default function App() {
     return res ?? { ok: false, error: 'Commit failed.' };
   };
 
+  const handleGenerateCommitMessage = async () => {
+    if (!workspace) return { ok: false, error: 'No workspace.' };
+    const res = await window.electron?.gitGenerateCommitMessage?.(workspace, config?.activeProfileId);
+    return res ?? { ok: false, error: 'Generation failed.' };
+  };
+
   const handleCheckout = async (branch: string) => {
     if (!workspace) return;
     const res = await window.electron?.gitCheckout?.(workspace, branch);
@@ -540,6 +546,7 @@ export default function App() {
       // Real usage only — an estimate as the compaction trigger could compact
       // too early (or too late) when the provider never reports usage.
       lastInputTokens: contextInfo && !contextInfo.estimated ? contextInfo.lastInputTokens : undefined,
+      sessionId: currentSessionId ?? undefined,
     });
   };
 
@@ -554,6 +561,7 @@ export default function App() {
     window.electron?.sendPrompt(userPrompt, workspace, config.activeProfileId, history, {
       lastInputTokens: contextInfo && !contextInfo.estimated ? contextInfo.lastInputTokens : undefined,
       skillContent,
+      sessionId: currentSessionId ?? undefined,
     });
   };
 
@@ -957,6 +965,7 @@ export default function App() {
           workspace={workspace}
           onRefresh={refreshGit}
           onCommit={handleCommit}
+          onGenerateMessage={handleGenerateCommitMessage}
           progress={progress}
           sessionUsage={sessionUsage}
           createdAt={currentCreatedAt}

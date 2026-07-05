@@ -376,6 +376,27 @@ export function makeTools({ workspace, onEvent, requestPermission, requestQuesti
             }
         }
     });
+    tools.delete_memory = tool({
+        description: 'Remove a saved memory fact that is wrong or no longer relevant. Deletes the fact file and its MEMORY index entry. Prefer write_memory (reusing the name) when a fact is merely outdated; delete when it is wrong or obsolete.',
+        inputSchema: z.object({
+            name: z.string().describe('The fact name exactly as listed under MEMORY.'),
+            scope: z.enum(['project', 'global']).nullable().optional().describe('Where the fact lives. Omit to search project then global.'),
+        }),
+        execute: async ({ name, scope }) => {
+            emit({ type: 'tool_call', name: 'delete_memory', arguments: JSON.stringify({ name, scope: scope ?? null }) });
+            if (!await requestPermission('delete_memory', { name, scope: scope ?? null }, agentId)) return denied('delete_memory');
+            try {
+                const deletedFrom = memoryStore.deleteFact(scope ?? null, workspace, name);
+                const res = deletedFrom ? `Deleted memory "${name}" (${deletedFrom}).` : `Error: no memory fact named "${name}".`;
+                emit({ type: 'tool_result', name: 'delete_memory', result: res });
+                return res;
+            } catch (e: any) {
+                const errMsg = `Error deleting memory: ${e.message}`;
+                emit({ type: 'tool_result', name: 'delete_memory', result: errMsg });
+                return errMsg;
+            }
+        }
+    });
     if (includeSpawn) {
         // Main agent only: subagents report plain text back to the orchestrator,
         // so a widget rendered from a subagent would appear out of context.

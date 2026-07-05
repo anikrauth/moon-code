@@ -130,6 +130,24 @@ export function createMemoryStore({ homeDir = os.homedir() } = {}) {
             return name;
         },
 
+        deleteFact(scope, workspace, name) {
+            if (!NAME_RE.test(name)) return null;
+            const scopes = scope ? [scope] : ['project', 'global'];
+            for (const s of scopes) {
+                if (s === 'project' && !workspace) continue;
+                const inIndex = listFacts(s, workspace).some((f) => f.name === name);
+                let hadFile = false;
+                try { fs.unlinkSync(factFile(s, workspace, name)); hadFile = true; } catch { /* no fact file */ }
+                // Rewrite the index even when the file was already gone, so a
+                // dangling index entry still gets cleaned up.
+                if (hadFile || inIndex) {
+                    writeIndex(s, workspace, listFacts(s, workspace).filter((f) => f.name !== name));
+                    return s;
+                }
+            }
+            return null;
+        },
+
         appendInstruction(scope, workspace, text) {
             const clean = (text ?? '').trim();
             if (!clean) throw new Error('empty memory');

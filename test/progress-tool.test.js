@@ -1,8 +1,16 @@
 // test/progress-tool.test.js
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { startServer, textChunks, toolCallChunk, chunk, baseUrlOf } = require('./helpers/fake-openai');
 const { handlePrompt } = require('../dist/main/features/agent/index.js');
+
+// Tmp workspace, not process.cwd(): set_progress now mirrors goal/steps into
+// <workspace>/.moon/state.json, and fixture goals must not pollute the repo's
+// own resume state.
+const tmpWs = () => fs.mkdtempSync(path.join(os.tmpdir(), 'moon-progress-ws-'));
 
 test('set_progress emits a progress event, no tool_call/tool_result chip', async (t) => {
   const steps = [
@@ -18,7 +26,7 @@ test('set_progress emits a progress event, no tool_call/tool_result chip', async
 
   const events = [];
   await new Promise((resolve) => {
-    handlePrompt('go', process.cwd(), { apiKey: 'k', baseUrl: baseUrlOf(server), model: 'mock' }, undefined,
+    handlePrompt('go', tmpWs(), { apiKey: 'k', baseUrl: baseUrlOf(server), model: 'mock' }, undefined,
       (e) => { events.push(e); if (e.type === 'done') resolve(); }, async () => true);
   });
 
@@ -47,7 +55,7 @@ test('set_progress preserves a model-supplied stable id', async (t) => {
 
   const events = [];
   await new Promise((resolve) => {
-    handlePrompt('go', process.cwd(), { apiKey: 'k', baseUrl: baseUrlOf(server), model: 'mock' }, undefined,
+    handlePrompt('go', tmpWs(), { apiKey: 'k', baseUrl: baseUrlOf(server), model: 'mock' }, undefined,
       (e) => { events.push(e); if (e.type === 'done') resolve(); }, async () => true);
   });
 
@@ -69,7 +77,7 @@ test('set_progress de-dupes a duplicated id with a positional fallback', async (
 
   const events = [];
   await new Promise((resolve) => {
-    handlePrompt('go', process.cwd(), { apiKey: 'k', baseUrl: baseUrlOf(server), model: 'mock' }, undefined,
+    handlePrompt('go', tmpWs(), { apiKey: 'k', baseUrl: baseUrlOf(server), model: 'mock' }, undefined,
       (e) => { events.push(e); if (e.type === 'done') resolve(); }, async () => true);
   });
 
@@ -91,7 +99,7 @@ test('set_progress is not offered to subagents', async (t) => {
   t.after(() => server.close());
 
   await new Promise((resolve) => {
-    handlePrompt('go', process.cwd(), { apiKey: 'k', baseUrl: baseUrlOf(server), model: 'mock' }, undefined,
+    handlePrompt('go', tmpWs(), { apiKey: 'k', baseUrl: baseUrlOf(server), model: 'mock' }, undefined,
       (e) => { if (e.type === 'done') resolve(); }, async () => true);
   });
 
