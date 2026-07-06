@@ -1,0 +1,7 @@
+{
+  "id": "comprehension-find-and-explain",
+  "category": "comprehension",
+  "prompt": "Where is the retry backoff computed and what is its maximum delay? Answer with the file and the value.",
+  "timeoutMs": 180000,
+  "permissionPolicy": "allow-all"
+}

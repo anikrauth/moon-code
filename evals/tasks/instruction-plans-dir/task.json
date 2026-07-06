@@ -1,0 +1,7 @@
+{
+  "id": "instruction-plans-dir",
+  "category": "instruction",
+  "prompt": "Write an implementation plan for adding user auth and save it.",
+  "timeoutMs": 180000,
+  "permissionPolicy": "allow-all"
+}

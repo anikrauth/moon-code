@@ -1,0 +1,7 @@
+{
+  "id": "bugfix-off-by-one",
+  "category": "bugfix",
+  "prompt": "Fix the failing test in this repo. Run the tests to verify.",
+  "timeoutMs": 180000,
+  "permissionPolicy": "allow-all"
+}
