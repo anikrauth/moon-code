@@ -1,7 +1,7 @@
 {
   "name": "moon-code",
   "version": "1.0.08",
-  "description": "Moon Code — AI coding agent desktop app",
+  "description": "Moon Code \u2014 AI coding agent desktop app",
   "main": "dist/main/main.js",
   "scripts": {
     "dev:vite": "vite",
@@ -61,7 +61,13 @@
     "mac": {
       "icon": "build/icon.png",
       "target": [
-        { "target": "dmg", "arch": ["arm64", "x64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
       ],
       "category": "public.app-category.developer-tools",
       "identity": null,
@@ -70,7 +76,12 @@
     "win": {
       "icon": "build/icon.ico",
       "target": [
-        { "target": "nsis", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
     },
     "nsis": {
@@ -80,8 +91,32 @@
     },
     "linux": {
       "icon": "build/icon.png",
-      "target": ["AppImage", "deb"],
+      "target": [
+        "AppImage",
+        "deb"
+      ],
       "category": "Development"
+    },
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 180,
+          "type": "file"
+        },
+        {
+          "x": 410,
+          "y": 180,
+          "type": "link",
+          "path": "/Applications"
+        },
+        {
+          "x": 270,
+          "y": 330,
+          "type": "file",
+          "path": "build/Fix Permissions.command"
+        }
+      ]
     }
   }
 }

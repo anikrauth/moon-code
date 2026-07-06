@@ -424,6 +424,10 @@ xattr -cr "/Applications/Moon Code.app"
 
 Then open it normally. Alternatives:
 
+- **Easiest:** the Moon Code `.dmg` includes a **`Fix Permissions.command`** helper.
+  After dragging Moon Code into Applications, double-click **`Fix Permissions.command`**
+  and it clears the quarantine flag for you. (The first time, you may need to right-click
+  it → **Open**, since the helper is quarantined too.)
 - **Right-click** the app → **Open** → **Open** in the dialog, or
 - **System Settings → Privacy & Security → Open Anyway** after the first blocked launch.
 
