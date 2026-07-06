@@ -1064,6 +1064,48 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
   color: var(--text-primary);
 }
 
+/* ---- Message actions (copy / retry / time) ---- */
+.msg-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  padding-left: 16px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.msg-row:hover .msg-actions {
+  opacity: 1;
+}
+
+.msg-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.msg-action-btn:hover {
+  color: var(--text-primary);
+  background: var(--surface-2, rgba(255, 255, 255, 0.06));
+  border-color: var(--border-color, rgba(255, 255, 255, 0.08));
+}
+
+.msg-action-time {
+  font-size: 11px;
+  color: var(--text-tertiary, var(--text-secondary));
+  margin-left: 2px;
+}
+
 /* ================================================================== */
 /*  MARKDOWN BODY                                                       */
 /* ================================================================== */

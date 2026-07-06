@@ -1,0 +1,10 @@
+{
+  "ticket": "Moon Code Fable-level behavior + eval harness",
+  "phase": "implementing",
+  "gates": {
+    "stop_the_line": true,
+    "verified": false,
+    "reviewed": false
+  },
+  "updatedAt": "2026-07-06T21:55:42.180807+00:00"
+}

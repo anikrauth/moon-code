@@ -1,6 +1,6 @@
 {
   "name": "moon-code",
-  "version": "1.0.07",
+  "version": "1.0.08",
   "description": "Moon Code — AI coding agent desktop app",
   "main": "dist/main/main.js",
   "scripts": {
@@ -63,7 +63,9 @@
       "target": [
         { "target": "dmg", "arch": ["arm64", "x64"] }
       ],
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "identity": null,
+      "gatekeeperAssess": false
     },
     "win": {
       "icon": "build/icon.ico",
