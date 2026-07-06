@@ -9,3 +9,5 @@ graphify-out/
 .DS_Store
 .moon/scratch/
 .moon/state.json
+evals/results/*
+!evals/results/.gitkeep
