@@ -7,6 +7,17 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
+// Strip NODE_TEST_CONTEXT so this spawnSync isn't silently skipped when
+// grade.js itself runs from a process already under `node --test` (e.g.
+// this project's own self-test suite) — Node's test runner treats a nested
+// `node --test` child as a recursive invocation and skips it, exiting 0
+// with zero tests run, which would otherwise masquerade as a false pass.
+function childEnv() {
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  return env;
+}
+
 function listJsFiles(dir, base = dir, out = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
@@ -41,6 +52,7 @@ async function grade(ctx) {
     cwd: ctx.workspace,
     encoding: 'utf-8',
     timeout: 30000,
+    env: childEnv(),
   });
   const pass = res.status === 0;
   const notes = pass
