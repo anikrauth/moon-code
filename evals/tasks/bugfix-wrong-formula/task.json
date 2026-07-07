@@ -1,0 +1,10 @@
+{
+  "id": "bugfix-wrong-formula",
+  "category": "bugfix",
+  "prompt": "Users report that when splitting a bill, the per-person amounts shown by splitEvenly() in split.js don't add back up to the original total — a few cents silently go missing. Fix split.js so the returned shares always sum exactly back to the original amount.",
+  "timeoutMs": 180000,
+  "permissionPolicy": "allow-all",
+  "questionScript": [
+    "Give the leftover cents to the first people in the list, one extra cent each, in the order they appear, until the remainder is used up."
+  ]
+}

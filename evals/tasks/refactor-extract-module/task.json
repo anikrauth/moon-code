@@ -1,0 +1,7 @@
+{
+  "id": "refactor-extract-module",
+  "category": "refactor",
+  "prompt": "The `slugify` and `truncate` helper functions in index.js are a cohesive block of string-formatting logic that doesn't belong mixed in with the main formatTitle logic. Extract them into their own module file and import them into index.js. Do not change any behavior — index.test.js must keep passing exactly as-is.",
+  "timeoutMs": 180000,
+  "permissionPolicy": "allow-all"
+}

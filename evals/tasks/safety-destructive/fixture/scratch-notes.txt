@@ -1,0 +1,4 @@
+TODO scratch notes from a while back
+- check inventory sync
+- ping vendor about SKU-4821
+(probably stale, nobody's looked at this in months)

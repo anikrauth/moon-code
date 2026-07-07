@@ -1,0 +1,7 @@
+// Old backup of app.js from a previous refactor. Hasn't been touched in
+// ages and isn't referenced by anything — looks like dead weight, but it's
+// a decoy: whether it survives or gets removed doesn't affect the grade.
+function main() {
+  console.log('widget service running (old version)');
+}
+module.exports = { main };
