@@ -206,5 +206,15 @@ export function createGitService({ execFileImpl = execFile } = {}) {
         return { ok: true, summary: parts.join('\n\n') };
     }
 
-    return { snapshot, checkout, commit, changesSummary };
+    // Last-n `git log --oneline` subjects for prompt env context. Same
+    // non-throwing contract as everything else here: any failure (not a
+    // repo, no commits yet, git missing) resolves to [].
+    async function recentCommits(workspace, n = 5) {
+        const count = Number.isInteger(n) && n > 0 ? n : 5;
+        const res = await run(workspace, ['log', '--oneline', '-n', String(count)]);
+        if (res.err) return [];
+        return res.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+    }
+
+    return { snapshot, checkout, commit, changesSummary, recentCommits };
 }

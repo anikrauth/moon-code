@@ -16,6 +16,7 @@ import { registry } from './entities/ui-spec/uiRegistry';
 import { parseAssistantContent } from './entities/chat-message/parseAssistantContent';
 import { parseRenderUiSpec } from '@shared/lib/renderUiSpec';
 import Markdown, { setLinkWorkspace } from './entities/chat-message/Markdown';
+import { MessageActions } from './entities/chat-message/MessageActions';
 import PermissionRequest from './features/permission-request/PermissionRequest';
 import QuestionPrompt from './features/question-prompt/QuestionPrompt';
 
@@ -85,6 +86,7 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   toolCalls?: any[];
+  ts?: number;
 }
 
 /* StrictMode double-invokes effects in dev; both invocations would await
@@ -101,6 +103,11 @@ export default function App() {
   const [isTyping, setIsTyping] = useState(false);
   const [statusText, setStatusText] = useState<string | null>(null);
   const [config, setConfig] = useState<any>(null);
+  // Plan mode (Feature 15 Task 3): component state only, not persisted per
+  // session — matches the brief's MVP scope. Enforcement lives at the tool
+  // layer (toolRouter.ts); this just toggles what `mode` rides with each
+  // prompt in the usageHint meta bag.
+  const [planMode, setPlanMode] = useState(false);
 
   /* ---- Overlay-modal state (Skills/MCP/Settings/Usage) ---- */
   const [activeModal, setActiveModal] = useState<string | null>(null);
@@ -326,7 +333,7 @@ export default function App() {
           if (lastMsg && lastMsg.role === 'assistant') {
             newMsgs[lastIdx] = { ...lastMsg, content: lastMsg.content + event.content };
           } else {
-            newMsgs.push({ id: nextMsgId(), role: 'assistant', content: event.content });
+            newMsgs.push({ id: nextMsgId(), role: 'assistant', content: event.content, ts: Date.now() });
           }
         } else if (event.type === 'tool_call') {
           if (event.name === 'skill') {
@@ -345,7 +352,7 @@ export default function App() {
           if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content === '') {
             newMsgs[lastIdx] = { ...lastMsg, toolCalls: [...(lastMsg.toolCalls || []), event] };
           } else {
-            newMsgs.push({ id: nextMsgId(), role: 'assistant', content: '', toolCalls: [event] });
+            newMsgs.push({ id: nextMsgId(), role: 'assistant', content: '', toolCalls: [event], ts: Date.now() });
           }
         } else if (event.type === 'tool_result') {
           if (lastMsg && lastMsg.toolCalls) {
@@ -364,7 +371,7 @@ export default function App() {
               toolCalls: lastMsg.toolCalls.map((c: any) => c.result ? c : { ...c, result: 'aborted' }),
             };
           }
-          newMsgs.push({ id: nextMsgId(), role: 'assistant', content: `Error: ${event.content}` });
+          newMsgs.push({ id: nextMsgId(), role: 'assistant', content: `Error: ${event.content}`, ts: Date.now() });
         }
         return newMsgs;
       });
@@ -536,7 +543,7 @@ export default function App() {
     if (trimmed.startsWith('#')) { setInput(''); quickAddMemory(trimmed); return; }
     if (!input.trim() || !workspace || !activeProfile?.hasKey) return;
 
-    const newMsg: ChatMessage = { id: nextMsgId(), role: 'user', content: input };
+    const newMsg: ChatMessage = { id: nextMsgId(), role: 'user', content: input, ts: Date.now() };
     setMessages(prev => [...prev, newMsg]);
     setInput('');
     setIsTyping(true);
@@ -547,13 +554,30 @@ export default function App() {
       // too early (or too late) when the provider never reports usage.
       lastInputTokens: contextInfo && !contextInfo.estimated ? contextInfo.lastInputTokens : undefined,
       sessionId: currentSessionId ?? undefined,
+      mode: planMode ? 'plan' : undefined,
+    });
+  };
+
+  /* Retry a user message: strip everything from that message onward, then
+     re-send its content with the history that preceded it. */
+  const handleRetry = (index: number) => {
+    if (isTyping || !workspace || !activeProfile?.hasKey) return;
+    const msg = messages[index];
+    if (!msg || msg.role !== 'user') return;
+    setMessages(prev => [...prev.slice(0, index), { ...msg, id: nextMsgId(), ts: Date.now() }]);
+    setIsTyping(true);
+    setStatusText(null);
+    window.electron?.sendPrompt(msg.content, workspace, config.activeProfileId, history, {
+      lastInputTokens: contextInfo && !contextInfo.estimated ? contextInfo.lastInputTokens : undefined,
+      sessionId: currentSessionId ?? undefined,
+      mode: planMode ? 'plan' : undefined,
     });
   };
 
   /* ---- Skills handlers ---- */
   const handleSendWithSkillContent = (userPrompt: string, skillContent: string) => {
     if (!workspace || !activeProfile?.hasKey) return;
-    const newMsg: ChatMessage = { id: nextMsgId(), role: 'user', content: userPrompt };
+    const newMsg: ChatMessage = { id: nextMsgId(), role: 'user', content: userPrompt, ts: Date.now() };
     setMessages(prev => [...prev, newMsg]);
     setInput('');
     setIsTyping(true);
@@ -562,6 +586,7 @@ export default function App() {
       lastInputTokens: contextInfo && !contextInfo.estimated ? contextInfo.lastInputTokens : undefined,
       skillContent,
       sessionId: currentSessionId ?? undefined,
+      mode: planMode ? 'plan' : undefined,
     });
   };
 
@@ -682,7 +707,7 @@ export default function App() {
 
   /* ---- Slash commands ---- */
   const appendLocalNote = (content: string) => {
-    setMessages((prev) => [...prev, { id: nextMsgId(), role: 'assistant', content }]);
+    setMessages((prev) => [...prev, { id: nextMsgId(), role: 'assistant', content, ts: Date.now() }]);
   };
 
   const compactNow = async () => {
@@ -903,6 +928,13 @@ export default function App() {
                     ) : msg.content}
                   </div>
                 )}
+                {msg.content !== '' && !(isTyping && i === messages.length - 1) && (
+                  <MessageActions
+                    content={msg.content}
+                    ts={msg.ts}
+                    onRetry={msg.role === 'user' && !isTyping ? () => handleRetry(i) : undefined}
+                  />
+                )}
                 {isTurnEnd(i) && !(isTyping && i === messages.length - 1) && (
                   <TurnSummaryCard toolCalls={turnToolCalls(i)} />
                 )}
@@ -941,6 +973,8 @@ export default function App() {
             profiles={config?.profiles ?? []}
             activeProfileId={config?.activeProfileId ?? null}
             onSelectProfile={(id) => window.electron?.setActiveProfile(id).then(setConfig)}
+            planMode={planMode}
+            onTogglePlanMode={() => setPlanMode((v) => !v)}
             busy={isTyping}
             onStop={() => window.electron?.cancelPrompt()}
             commands={slashCommands}

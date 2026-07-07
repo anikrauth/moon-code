@@ -3,7 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 contextBridge.exposeInMainWorld('electron', {
   selectFolder: () => ipcRenderer.invoke('dialog:openDirectory'),
   selectSkill: () => ipcRenderer.invoke('dialog:openSkill'),
-  sendPrompt: (prompt: string, workspace: string, profileId: string, history: any, meta?: { lastInputTokens?: number; skillContent?: string; sessionId?: string }) => ipcRenderer.send('agent:prompt', prompt, workspace, profileId, history, meta),
+  sendPrompt: (prompt: string, workspace: string, profileId: string, history: any, meta?: { lastInputTokens?: number; skillContent?: string; sessionId?: string; mode?: 'plan' | 'execute' }) => ipcRenderer.send('agent:prompt', prompt, workspace, profileId, history, meta),
   respondPermission: (id: string, allow: boolean, alwaysAllow: boolean) => ipcRenderer.send('agent:permission-response', id, allow, alwaysAllow),
   respondQuestion: (id: string, answer: string | null) => ipcRenderer.send('agent:question-response', id, answer),
   cancelPrompt: () => ipcRenderer.send('agent:cancel'),

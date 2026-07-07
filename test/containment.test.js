@@ -5,6 +5,7 @@ const path = require('path');
 const os = require('os');
 const { startServer, textChunks, toolCallChunk, chunk, baseUrlOf } = require('./helpers/fake-openai');
 const { handlePrompt } = require('../dist/main/features/agent/index.js');
+const { resolveInWorkspace, isUnderPlansDir } = require('../dist/main/features/agent/toolRouter.js');
 
 // Workspace nested inside a parent dir so '../' escapes into controlled territory.
 function mkNestedWorkspace(t) {
@@ -85,4 +86,40 @@ test('legit inner paths still work', async (t) => {
   assert.strictEqual(fs.readFileSync(path.join(ws, 'nested/dir/file.txt'), 'utf8'), 'ok');
   const read = await runTool(t, ws, { name: 'read_file', args: { filePath: 'nested/../inside.txt' } });
   assert.strictEqual(read, 'inner');
+});
+
+// --- Security review regression tests (Feature 15 Task 3 plan-mode review) ---
+// PoC A and PoC B below drive resolveInWorkspace/isUnderPlansDir directly
+// (the shared primitives), independent of plan mode's tool-layer wiring —
+// see test/plan-mode.test.js for the end-to-end write_file-is-blocked
+// versions of the same PoCs.
+
+test('PoC A: .moon/plans as a symlink to another in-workspace dir does not fool isUnderPlansDir', async (t) => {
+  const { ws } = mkNestedWorkspace(t);
+  fs.mkdirSync(path.join(ws, 'src'));
+  fs.mkdirSync(path.join(ws, '.moon'));
+  // A repo can ship this as a tracked mode-120000 symlink: .moon/plans -> src.
+  fs.symlinkSync(path.join(ws, 'src'), path.join(ws, '.moon', 'plans'), 'dir');
+
+  const absPath = resolveInWorkspace(ws, '.moon/plans/x.md');
+  // resolveInWorkspace only guards the *workspace* boundary — src is still
+  // inside the workspace, so this legitimately resolves.
+  assert.ok(absPath, 'resolveInWorkspace should resolve a path under the workspace');
+  // isUnderPlansDir must NOT be fooled into treating this as "under plans":
+  // the real target is <ws>/src, not <ws>/.moon/plans.
+  assert.strictEqual(isUnderPlansDir(ws, absPath), false);
+});
+
+test('PoC B: dangling symlink under .moon/plans is rejected by both resolveInWorkspace and isUnderPlansDir, nothing created outside the workspace', async (t) => {
+  const { ws } = mkNestedWorkspace(t);
+  fs.mkdirSync(path.join(ws, '.moon', 'plans'), { recursive: true });
+  const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moon-poc-outside-'));
+  t.after(() => fs.rmSync(outsideDir, { recursive: true, force: true }));
+  const outsideTarget = path.join(outsideDir, 'evil.md'); // does not exist yet, but its parent does
+  fs.symlinkSync(outsideTarget, path.join(ws, '.moon', 'plans', 'sneaky.md'));
+
+  assert.strictEqual(resolveInWorkspace(ws, '.moon/plans/sneaky.md'), null,
+    'a dangling symlink must not be treated as a plain not-yet-existing path');
+  assert.strictEqual(isUnderPlansDir(ws, path.join(ws, '.moon', 'plans', 'sneaky.md')), false);
+  assert.ok(!fs.existsSync(outsideTarget), 'nothing should have been created at the symlink target');
 });

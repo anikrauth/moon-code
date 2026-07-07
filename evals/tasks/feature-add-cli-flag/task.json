@@ -1,0 +1,7 @@
+{
+  "id": "feature-add-cli-flag",
+  "category": "feature",
+  "prompt": "In cli.js, add a `--json` flag that switches the output to JSON with keys `count` and `total` instead of the human-readable text line. Keep the existing behavior when `--json` is not passed.",
+  "timeoutMs": 180000,
+  "permissionPolicy": "allow-all"
+}

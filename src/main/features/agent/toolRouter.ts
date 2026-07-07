@@ -51,36 +51,104 @@ export function truncateOutput(text, limit = TOOL_OUTPUT_CHAR_LIMIT) {
     return `${text.slice(0, head)}\n[... truncated ${removed} chars ...]\n${text.slice(-tail)}`;
 }
 
+// Realpath the deepest existing ancestor of `target` (the target itself may
+// not exist yet, e.g. write_file creating a new file) and reconstruct the
+// full realpath by re-appending the not-yet-existing suffix. Returns null
+// only in the pathological case where no ancestor (up to fs root) resolves,
+// or when `probe` exists as a dangling symlink (see below).
+//
+// Security note (Feature 15 Task 3 review, Critical #2): fs.realpathSync
+// throws ENOENT for two very different situations that must NOT be treated
+// the same way:
+//   1. `probe` genuinely doesn't exist yet (e.g. a not-yet-created file/dir
+//      under an existing parent) — safe to fall back to the lexical
+//      string-join below, since there's nothing on disk to be tricked by.
+//   2. `probe` exists on disk as a symlink whose target doesn't resolve (a
+//      "dangling" symlink) — realpathSync still throws ENOENT here, but the
+//      path is NOT absent: fs.writeFileSync/readFileSync et al. will follow
+//      that symlink at I/O time. Falling through to the string-join branch
+//      would reconstruct a path as if it were a plain not-yet-existing file
+//      under the last-resolved ancestor, silently blessing a write that
+//      actually lands wherever the dangling symlink points — including
+//      outside the workspace entirely.
+// fs.lstatSync distinguishes the two without following the final symlink.
+function realpathDeep(target) {
+    let probe = target;
+    let suffix = '';
+    for (;;) {
+        try {
+            const real = fs.realpathSync(probe);
+            return suffix ? path.join(real, suffix) : real;
+        } catch {
+            try {
+                if (fs.lstatSync(probe).isSymbolicLink()) return null; // dangling symlink — reject, do not string-join
+            } catch { /* lstat also threw ENOENT -> genuinely absent, fall through */ }
+            const parent = path.dirname(probe);
+            if (parent === probe) return null;
+            suffix = suffix ? path.join(path.basename(probe), suffix) : path.basename(probe);
+            probe = parent;
+        }
+    }
+}
+
 export function resolveInWorkspace(workspace, relPath) {
     const root = path.resolve(workspace);
     const abs = path.resolve(root, relPath);
     if (abs !== root && !abs.startsWith(root + path.sep)) return null;
     // Lexical check alone is not enough: a symlink inside the workspace can
-    // point anywhere on disk. Realpath the deepest existing ancestor (the
-    // target itself may not exist yet, e.g. write_file creating it) and
+    // point anywhere on disk. Realpath the deepest existing ancestor and
     // re-check containment against the realpath'd root — same defense as
     // realPathWithinWorkspace() in workspaceInit.ts, extended to not-yet-
     // existing paths.
     let realRoot;
     try { realRoot = fs.realpathSync(root); } catch { return null; }
-    let probe = abs;
-    let suffix = '';
-    for (;;) {
-        let real;
-        try { real = fs.realpathSync(probe); } catch {
-            const parent = path.dirname(probe);
-            if (parent === probe) return null;
-            suffix = suffix ? path.join(path.basename(probe), suffix) : path.basename(probe);
-            probe = parent;
-            continue;
-        }
-        const resolved = suffix ? path.join(real, suffix) : real;
-        if (resolved !== realRoot && !resolved.startsWith(realRoot + path.sep)) return null;
-        return abs;
-    }
+    const resolved = realpathDeep(abs);
+    if (resolved == null) return null;
+    if (resolved !== realRoot && !resolved.startsWith(realRoot + path.sep)) return null;
+    return abs;
 }
 
-export function makeTools({ workspace, onEvent, requestPermission, requestQuestion, agentId, includeSpawn, settings, spawnState, abortSignal, extraTools, limits, skillsCatalog }) {
+// Plan mode (Feature 15 Task 3): while active, write_file/edit_file may only
+// target this subdirectory — the tool-layer boundary that makes plan mode a
+// real guarantee rather than prompt guidance. `absPath` must already be a
+// resolveInWorkspace() result (validated against escaping the workspace);
+// this tightens containment to the plans subtree, with the same
+// realpath-follow defense against a symlink planted inside the workspace
+// that points elsewhere inside it (e.g. .moon/plans/link -> ../src).
+export function isUnderPlansDir(workspace, absPath) {
+    const root = path.resolve(workspace);
+    let realRoot;
+    try { realRoot = fs.realpathSync(root); } catch { return false; }
+    // Security note (Feature 15 Task 3 review, Critical #1): anchor the
+    // plans root to the already-verified REAL workspace root via a lexical
+    // join — never by realpath-ing the plans path itself. A repo can ship
+    // `.moon/plans` as a tracked mode-120000 symlink (e.g. `.moon/plans ->
+    // src`); fs.realpathSync(lexicalPlansRoot) would follow that symlink AT
+    // the `.moon/plans` component and silently redirect every "under plans"
+    // check into the symlink target, defeating the whole plan-mode boundary.
+    const realPlansRoot = path.join(realRoot, '.moon', 'plans');
+    // A legitimate plans dir is a real directory, not a symlink — reject
+    // outright (belt-and-suspenders on top of the lexical anchor above) if
+    // `.moon` or `.moon/plans` itself exists as a symlink. Doesn't-exist-yet
+    // is fine (e.g. first plan-mode write of the turn creates it via the
+    // write tool's own mkdir(recursive:true), after this check passes).
+    for (const p of [path.join(root, '.moon'), path.join(root, '.moon', 'plans')]) {
+        try {
+            if (fs.lstatSync(p).isSymbolicLink()) return false;
+        } catch { /* doesn't exist yet — fine */ }
+    }
+    // realpathDeep also defends against a symlink planted *inside* the plans
+    // dir that points elsewhere within the workspace (e.g.
+    // .moon/plans/link -> ../src) — resolved won't start with realPlansRoot.
+    const resolved = realpathDeep(absPath);
+    if (resolved == null) return false;
+    return resolved === realPlansRoot || resolved.startsWith(realPlansRoot + path.sep);
+}
+
+const PLAN_MODE_WRITE_ERROR = 'Error: plan mode active — file mutations are disabled outside .moon/plans/. Write your plan there, or ask the user to approve execution.';
+
+export function makeTools({ workspace, onEvent, requestPermission, requestQuestion, agentId, includeSpawn, settings, spawnState, abortSignal, extraTools, limits, skillsCatalog, mode }) {
+    const planMode = mode === 'plan';
     const emit = (e) => onEvent({ agent: agentId, ...e });
     const denied = (name) => {
         const res = 'User denied permission for this action.';
@@ -89,28 +157,41 @@ export function makeTools({ workspace, onEvent, requestPermission, requestQuesti
     };
     const tools: any = {
         run_command: tool({
-            description: 'Execute a bash command in the current workspace.',
+            description: 'Execute a bash command in the current workspace. Prefer grep_search/glob_search over shell grep/find. Never run destructive commands (rm -rf, git reset --hard, force-push) without user confirmation via ask_user. Supports timeoutSeconds (default 60, max 600).',
             inputSchema: z.object({
                 command: z.string().describe('The command line string to execute.'),
+                timeoutSeconds: z.number().int().min(1).max(600).nullable().optional().describe('Maximum seconds to let the command run before it is killed. Default 60, max 600.'),
             }),
-            execute: async ({ command }) => {
-                emit({ type: 'tool_call', name: 'run_command', arguments: JSON.stringify({ command }) });
-                if (!await requestPermission('run_command', { command }, agentId)) return denied('run_command');
+            execute: async ({ command, timeoutSeconds }) => {
+                emit({ type: 'tool_call', name: 'run_command', arguments: JSON.stringify({ command, timeoutSeconds }) });
+                // Plan mode: run_command is still available for read-only
+                // inspection, but every call must prompt the user fresh —
+                // bypass the always-allow cache so a prior "always allow"
+                // (from execute mode, or from this same plan-mode turn)
+                // can't silently approve a command the user never saw.
+                if (!await requestPermission('run_command', { command }, agentId, { forcePrompt: planMode })) return denied('run_command');
+                const timeoutSec = timeoutSeconds ?? 60;
                 try {
-                    const { stdout, stderr } = await execAsync(command, { cwd: workspace, timeout: 60000, signal: abortSignal });
+                    const { stdout, stderr } = await execAsync(command, { cwd: workspace, timeout: timeoutSec * 1000, signal: abortSignal });
                     const output = stdout + (stderr ? `\n[stderr]\n${stderr}` : '');
                     const finalOut = output.trim() ? truncateOutput(output) : 'Command executed successfully (no output).';
                     emit({ type: 'tool_result', name: 'run_command', result: finalOut });
                     return finalOut;
                 } catch (e: any) {
-                    const errMsg = truncateOutput(`Error: ${e.message}`);
+                    // exec's timeout kills the child (killed=true, signal set);
+                    // a user abort surfaces as AbortError instead, so
+                    // `killed && !aborted` isolates the timeout case.
+                    const timedOut = e.killed && !abortSignal?.aborted;
+                    const errMsg = timedOut
+                        ? `Error: command timed out after ${timeoutSec}s. If it legitimately needs longer, retry with a larger timeoutSeconds (max 600).`
+                        : truncateOutput(`Error: ${e.message}`);
                     emit({ type: 'tool_result', name: 'run_command', result: errMsg });
                     return errMsg;
                 }
             }
         }),
         read_file: tool({
-            description: 'Read the contents of a file.',
+            description: 'Read the contents of a file. Read a file before editing it; edits must be based on current file contents, not memory.',
             inputSchema: z.object({
                 filePath: z.string().describe('Path to the file, relative to workspace.'),
                 offset: z.number().int().min(1).nullable().optional().describe('1-based line number to start reading from. Default 1.'),
@@ -155,7 +236,7 @@ export function makeTools({ workspace, onEvent, requestPermission, requestQuesti
             }
         }),
         write_file: tool({
-            description: 'Create a new file with the given content (creates parent directories). For modifying an existing file, use edit_file instead.',
+            description: 'Create a new file with the given content (creates parent directories). For modifying an existing file, use edit_file instead. Overwrites the target if it exists — read it first unless you created it this turn. Do not create documentation/summary files the user did not ask for.',
             inputSchema: z.object({
                 filePath: z.string().describe('Path to the file, relative to workspace.'),
                 content: z.string().describe('The full content to write into the file.'),
@@ -167,6 +248,10 @@ export function makeTools({ workspace, onEvent, requestPermission, requestQuesti
                     const errMsg = `Error: path escapes the workspace: ${filePath}`;
                     emit({ type: 'tool_result', name: 'write_file', result: errMsg });
                     return errMsg;
+                }
+                if (planMode && !isUnderPlansDir(workspace, absPath)) {
+                    emit({ type: 'tool_result', name: 'write_file', result: PLAN_MODE_WRITE_ERROR });
+                    return PLAN_MODE_WRITE_ERROR;
                 }
                 if (!await requestPermission('write_file', { filePath }, agentId)) return denied('write_file');
                 try {
@@ -187,7 +272,7 @@ export function makeTools({ workspace, onEvent, requestPermission, requestQuesti
             }
         }),
         edit_file: tool({
-            description: 'Edit an existing file by replacing an exact string match. oldString must appear exactly once in the file — include enough surrounding lines to make it unique.',
+            description: 'Edit an existing file by replacing an exact string match. oldString must be copied exactly from a read_file result in this conversation and must occur exactly once in the file — include enough surrounding lines to make it unique.',
             inputSchema: z.object({
                 filePath: z.string().describe('Path to the file, relative to workspace.'),
                 oldString: z.string().describe('Exact existing text to replace, including whitespace and indentation.'),
@@ -200,6 +285,10 @@ export function makeTools({ workspace, onEvent, requestPermission, requestQuesti
                     const errMsg = `Error: path escapes the workspace: ${filePath}`;
                     emit({ type: 'tool_result', name: 'edit_file', result: errMsg });
                     return errMsg;
+                }
+                if (planMode && !isUnderPlansDir(workspace, absPath)) {
+                    emit({ type: 'tool_result', name: 'edit_file', result: PLAN_MODE_WRITE_ERROR });
+                    return PLAN_MODE_WRITE_ERROR;
                 }
                 if (!await requestPermission('edit_file', { filePath, oldString, newString }, agentId)) return denied('edit_file');
                 try {
@@ -229,7 +318,7 @@ export function makeTools({ workspace, onEvent, requestPermission, requestQuesti
             }
         }),
         list_dir: tool({
-            description: 'List files and directories in a path.',
+            description: 'List files and directories in a path. For finding files by name/pattern across the tree, prefer glob_search.',
             inputSchema: z.object({
                 dirPath: z.string().describe('Path to the directory, relative to workspace. Use "." for root.'),
             }),
@@ -479,7 +568,11 @@ ${spawnState.projectMemory ? `\nPROJECT INSTRUCTIONS (from MOON.md in the worksp
 ${(spawnState.memoryCatalog?.length) ? `\nMEMORY (call read_memory to load a fact's detail):\n${spawnState.memoryCatalog.map((f) => `- ${f.name} [${f.scope}] — ${f.description}`).join('\n')}\n` : ''}
 ${spawnState.skillsText ? `\n${spawnState.skillsText}\n` : ''}`;
                 try {
-                    const subTools = makeTools({ workspace, onEvent, requestPermission, agentId: subId, includeSpawn: false, settings, spawnState, abortSignal, extraTools, limits, skillsCatalog: spawnState.skillsCatalog });
+                    // Mode MUST propagate to subagents: a subagent that can
+                    // write files outside .moon/plans/ while the main agent
+                    // is plan-gated would be an escape hatch for the whole
+                    // boundary.
+                    const subTools = makeTools({ workspace, onEvent, requestPermission, agentId: subId, includeSpawn: false, settings, spawnState, abortSignal, extraTools, limits, skillsCatalog: spawnState.skillsCatalog, mode });
                     const { text } = await runAgentLoop({
                         prompt: task, workspace, settings, history: [],
                         onEvent, requestPermission, agentId: subId,

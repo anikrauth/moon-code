@@ -1,0 +1,7 @@
+{
+  "id": "testwriting-cover-function",
+  "category": "testing",
+  "prompt": "The `clamp` function in util.js has no test coverage. Write tests for it covering the normal case (value already in range), value below min, value above max, and min === max.",
+  "timeoutMs": 180000,
+  "permissionPolicy": "allow-all"
+}

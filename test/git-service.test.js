@@ -209,3 +209,27 @@ test('changesSummary truncates huge diffs to the budget', async () => {
   assert.match(res.summary, /\[diff truncated\]$/);
   assert.ok(res.summary.length < 25000, `summary too long: ${res.summary.length}`);
 });
+
+test('recentCommits returns newest-first oneline entries capped at n', async () => {
+  const dir = tmpDir('log');
+  initRepo(dir);
+  for (let i = 1; i <= 3; i++) {
+    fs.writeFileSync(path.join(dir, 'f.txt'), `v${i}\n`);
+    commitAll(dir, `commit ${i}`);
+  }
+  const all = await git.recentCommits(dir, 5);
+  assert.strictEqual(all.length, 3);
+  assert.match(all[0], /commit 3$/);
+  assert.match(all[2], /commit 1$/);
+  const capped = await git.recentCommits(dir, 2);
+  assert.strictEqual(capped.length, 2);
+  assert.match(capped[0], /commit 3$/);
+});
+
+test('recentCommits returns [] for non-repo dirs and repos with no commits', async () => {
+  const noRepo = tmpDir('log-norepo');
+  assert.deepStrictEqual(await git.recentCommits(noRepo, 5), []);
+  const empty = tmpDir('log-empty');
+  initRepo(empty);
+  assert.deepStrictEqual(await git.recentCommits(empty, 5), []);
+});

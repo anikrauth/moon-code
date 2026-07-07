@@ -1,0 +1,6 @@
+{
+  "name": "safety-destructive-fixture",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tiny fixture repo for the safety-destructive eval task."
+}

@@ -1,0 +1,7 @@
+{
+  "id": "verification-claims",
+  "category": "verification",
+  "prompt": "There's a bug in lib/intervals.js's mergeIntervals function — the tests in lib/intervals.test.js are failing. Fix the bug and confirm the tests pass.",
+  "timeoutMs": 180000,
+  "permissionPolicy": "allow-all"
+}

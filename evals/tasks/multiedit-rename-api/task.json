@@ -1,0 +1,7 @@
+{
+  "id": "multiedit-rename-api",
+  "category": "multi-file",
+  "prompt": "Rename the function `computeTotal` (defined in math.js) to `calculateOrderTotal` everywhere it is defined, imported, or called across this repo (math.js, invoice.js, report.js, cli.js). Do not change any behavior.",
+  "timeoutMs": 180000,
+  "permissionPolicy": "allow-all"
+}

@@ -1,0 +1,173 @@
+// Writes evals/results/<ISO-timestamp>/results.json and a leaderboard.md
+// next to it.
+const fs = require('node:fs');
+const path = require('node:path');
+
+const RESULTS_ROOT = path.join(__dirname, '..', 'results');
+
+function isoStampForDir() {
+  // Colons aren't safe in directory names on all platforms; keep it
+  // sortable and filesystem-safe.
+  return new Date().toISOString().replace(/[:.]/g, '-');
+}
+
+function mean(nums) {
+  const vals = nums.filter((n) => typeof n === 'number' && !Number.isNaN(n));
+  if (vals.length === 0) return null;
+  return vals.reduce((a, b) => a + b, 0) / vals.length;
+}
+
+function fmt(n, digits = 1) {
+  if (n === null || n === undefined) return 'n/a';
+  return Number(n).toFixed(digits);
+}
+
+// Groups rows by model x variant, then by category within each group, and
+// computes pass rates / mean metrics.
+function summarize(rows) {
+  const groups = new Map();
+  for (const row of rows) {
+    const key = `${row.model}::${row.variant}`;
+    if (!groups.has(key)) {
+      groups.set(key, { model: row.model, variant: row.variant, rows: [] });
+    }
+    groups.get(key).rows.push(row);
+  }
+
+  const summaries = [];
+  for (const { model, variant, rows: groupRows } of groups.values()) {
+    const passRate = mean(groupRows.map((r) => (r.pass ? 1 : 0)));
+    const meanToolCalls = mean(groupRows.map((r) => r.metrics && r.metrics.toolCallCount));
+    const meanTokens = mean(groupRows.map((r) => r.metrics && r.metrics.usage && r.metrics.usage.totalTokens));
+    const meanWallTimeMs = mean(groupRows.map((r) => r.metrics && r.metrics.wallTimeMs));
+
+    const byCategory = new Map();
+    for (const row of groupRows) {
+      const cat = row.category || 'uncategorized';
+      if (!byCategory.has(cat)) byCategory.set(cat, []);
+      byCategory.get(cat).push(row);
+    }
+    const categoryRates = [...byCategory.entries()].map(([category, catRows]) => ({
+      category,
+      passRate: mean(catRows.map((r) => (r.pass ? 1 : 0))),
+    }));
+
+    summaries.push({ model, variant, passRate, meanToolCalls, meanTokens, meanWallTimeMs, categoryRates, count: groupRows.length });
+  }
+  return summaries;
+}
+
+// Finds the single biggest per-category pass-rate delta (v2 - baseline)
+// across all models that ran both variants — the headline "proof" number
+// for the leaderboard's summary block. Returns null if no model ran both
+// variants (nothing to diff).
+function biggestCategoryDelta(summaries) {
+  const byModel = new Map();
+  for (const s of summaries) {
+    if (!byModel.has(s.model)) byModel.set(s.model, {});
+    byModel.get(s.model)[s.variant] = s;
+  }
+  let best = null;
+  for (const [model, variants] of byModel.entries()) {
+    if (!variants.baseline || !variants.v2) continue;
+    const baseCats = new Map(variants.baseline.categoryRates.map((c) => [c.category, c.passRate]));
+    const v2Cats = new Map(variants.v2.categoryRates.map((c) => [c.category, c.passRate]));
+    const allCats = new Set([...baseCats.keys(), ...v2Cats.keys()]);
+    for (const category of allCats) {
+      const basePr = baseCats.get(category) ?? 0;
+      const v2Pr = v2Cats.get(category) ?? 0;
+      const delta = v2Pr - basePr;
+      if (!best || Math.abs(delta) > Math.abs(best.delta)) {
+        best = { model, category, delta };
+      }
+    }
+  }
+  return best;
+}
+
+function buildLeaderboardMarkdown(rows) {
+  const summaries = summarize(rows);
+  const allCategories = [...new Set(rows.map((r) => r.category || 'uncategorized'))].sort();
+
+  const lines = [];
+  lines.push('# Eval Leaderboard');
+  lines.push('');
+  lines.push(`Generated: ${new Date().toISOString()}`);
+  lines.push('');
+
+  // Delta column (and summary-block diffing below) applies when both
+  // baseline and v2 variants are present for the same model.
+  const byModel = new Map();
+  for (const s of summaries) {
+    if (!byModel.has(s.model)) byModel.set(s.model, {});
+    byModel.get(s.model)[s.variant] = s;
+  }
+  const hasDelta = [...byModel.values()].some((v) => v.baseline && v.v2);
+
+  // Top-line summary block: the "proof" numbers a reader wants before
+  // diving into the full per-category table below.
+  lines.push('## Summary');
+  lines.push('');
+  lines.push(`- Total attempts: ${rows.length}`);
+  for (const s of summaries) {
+    lines.push(`- ${s.model} ${s.variant}: ${fmt((s.passRate ?? 0) * 100)}% pass rate (${s.count} attempts)`);
+  }
+  const biggest = biggestCategoryDelta(summaries);
+  if (biggest) {
+    lines.push(`- Biggest per-category delta: **${biggest.category}** for ${biggest.model} — ${biggest.delta >= 0 ? '+' : ''}${fmt(biggest.delta * 100)}% (v2 vs baseline)`);
+  }
+  lines.push('');
+  lines.push('## Full Results');
+  lines.push('');
+
+  const header = ['Model', 'Variant', 'Pass Rate', ...allCategories.map((c) => `${c} pass rate`), 'Mean Tool Calls', 'Mean Tokens', 'Mean Wall Time (ms)'];
+  if (hasDelta) header.push('Delta (v2 - baseline)');
+
+  lines.push(`| ${header.join(' | ')} |`);
+  lines.push(`| ${header.map(() => '---').join(' | ')} |`);
+
+  for (const s of summaries) {
+    const catCells = allCategories.map((c) => {
+      const found = s.categoryRates.find((cr) => cr.category === c);
+      return found ? fmt((found.passRate ?? 0) * 100) + '%' : 'n/a';
+    });
+    const row = [
+      s.model,
+      s.variant,
+      `${fmt((s.passRate ?? 0) * 100)}%`,
+      ...catCells,
+      fmt(s.meanToolCalls, 1),
+      fmt(s.meanTokens, 0),
+      fmt(s.meanWallTimeMs, 0),
+    ];
+    if (hasDelta) {
+      const modelGroup = byModel.get(s.model);
+      if (s.variant === 'v2' && modelGroup.baseline) {
+        const delta = (s.passRate ?? 0) - (modelGroup.baseline.passRate ?? 0);
+        row.push(`${delta >= 0 ? '+' : ''}${fmt(delta * 100)}%`);
+      } else {
+        row.push('');
+      }
+    }
+    lines.push(`| ${row.join(' | ')} |`);
+  }
+
+  return lines.join('\n') + '\n';
+}
+
+// Writes results.json + leaderboard.md into evals/results/<ISO-timestamp>/
+// and returns the directory path and the two file paths.
+function writeReport(rows, { resultsRoot = RESULTS_ROOT, stamp = isoStampForDir() } = {}) {
+  const dir = path.join(resultsRoot, stamp);
+  fs.mkdirSync(dir, { recursive: true });
+
+  const resultsPath = path.join(dir, 'results.json');
+  fs.writeFileSync(resultsPath, JSON.stringify(rows, null, 2));
+
+  const leaderboardPath = path.join(dir, 'leaderboard.md');
+  fs.writeFileSync(leaderboardPath, buildLeaderboardMarkdown(rows));
+
+  return { dir, resultsPath, leaderboardPath };
+}
+
+module.exports = { writeReport, summarize, buildLeaderboardMarkdown, biggestCategoryDelta, isoStampForDir };

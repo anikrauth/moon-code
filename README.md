@@ -409,3 +409,28 @@ Because coding with an agent shouldn't mean context loss, opaque behavior, or ve
 - **Your workflow adapts** — discoverable skills, extensible tool set, multi-model support
 
 Moon Code isn't just an AI chat window. It's a full agentic development environment that thinks with you, works in your workspace, and grows with your practices.
+
+---
+
+## 🍎 macOS: "Moon Code is damaged and can't be opened"
+
+Moon Code for macOS is currently **unsigned** (no Apple Developer account yet), so macOS
+Gatekeeper quarantines it on download and shows a "damaged and can't be opened" warning.
+The app is not actually damaged. Clear the quarantine flag once after installing:
+
+```bash
+xattr -cr "/Applications/Moon Code.app"
+```
+
+Then open it normally. Alternatives:
+
+- **Easiest:** the Moon Code `.dmg` includes a **`Fix Permissions.command`** helper.
+  After dragging Moon Code into Applications, double-click **`Fix Permissions.command`**
+  and it clears the quarantine flag for you. (The first time, you may need to right-click
+  it → **Open**, since the helper is quarantined too.)
+- **Right-click** the app → **Open** → **Open** in the dialog, or
+- **System Settings → Privacy & Security → Open Anyway** after the first blocked launch.
+
+> A permanent fix (no warning at all, for every user) requires an Apple Developer account
+> ($99/yr) for Developer ID signing + notarization. Until then, the `xattr` step above is
+> the supported workaround.

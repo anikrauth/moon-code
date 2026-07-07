@@ -11,6 +11,7 @@ import { resolveLimits } from '../../../shared/lib/modelLimits';
 import { StatusLine } from '../status/statusLine';
 import { estimateTokens, compactHistory } from './historyCompaction';
 import { loadMemory, buildSystemPrompt } from './systemPrompt';
+import { buildEnvContext } from './envContext';
 // Circular with toolRouter.ts: see the note in toolRouter.ts's import of
 // runAgentLoop from this file — both sides only reference the other inside
 // callbacks invoked after module load, so this resolves fine at runtime.
@@ -127,7 +128,7 @@ export async function handlePrompt(
     abortSignal?: AbortSignal,
     extraTools?: any,
     skillsText?: string,
-    usageHint?: { lastInputTokens?: number; skillContent?: string },
+    usageHint?: { lastInputTokens?: number; skillContent?: string; promptVariant?: 'baseline' | 'v2'; sessionId?: string; mode?: 'plan' | 'execute' },
     skillsCatalog?: { id: string; description: string; content: string }[],
     requestQuestion?: (question: string, options: { label: string; description?: string }[], agentId: string) => Promise<string>,
 ) {
@@ -147,7 +148,12 @@ export async function handlePrompt(
             try { previousState = buildResumeContext(workspace); } catch { /* best-effort */ }
         }
 
-        const systemPrompt = buildSystemPrompt({ workspace, scratchDir, plansDir, globalMemory, projectMemory, memoryCatalog, skillsText, usageHint, previousState });
+        // Best-effort environment block; only the v2 prompt variant renders
+        // it (baseline output stays byte-identical to the pre-variant prompt).
+        let envContext = '';
+        try { envContext = await buildEnvContext({ workspace, model: settings.model || 'gpt-4o' }); } catch { /* never block a turn on env context */ }
+
+        const systemPrompt = buildSystemPrompt({ workspace, scratchDir, plansDir, globalMemory, projectMemory, memoryCatalog, skillsText, usageHint, previousState, envContext });
 
         // Single wrap point for main-agent + subagent events: tracks whether
         // this turn edited files / saved memory (end-of-turn nudge), and
@@ -166,11 +172,12 @@ export async function handlePrompt(
             onEvent(e);
         };
 
+        const mode = usageHint?.mode === 'plan' ? 'plan' : 'execute';
         const tools = makeTools({
             workspace, onEvent: wrappedOnEvent, requestPermission, requestQuestion, agentId: 'main',
             includeSpawn: true, settings,
             spawnState: { counter: 0, projectMemory, globalMemory, memoryCatalog, skillsText: skillsText ?? '', skillsCatalog: skillsCatalog ?? [] },
-            abortSignal, extraTools, limits, skillsCatalog: skillsCatalog ?? [],
+            abortSignal, extraTools, limits, skillsCatalog: skillsCatalog ?? [], mode,
         });
 
         let statusLine: any = null;
