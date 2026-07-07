@@ -128,18 +128,56 @@ test('HOME isolation: worker does not read the real ~/.moon during the attempt',
   const server = await startServer(toolThenDone('done, no files written.'));
   t.after(() => server.close());
 
+  // Pre-create the fake HOME ourselves (instead of letting runAttempt make
+  // one internally) and seed it with a canary global-memory file. If the
+  // forked worker actually resolves HOME to this directory (not the real
+  // user HOME), memoryStore.loadInstructions() will read this file via
+  // os.homedir()/.moon/MOON.md and systemPrompt.ts inlines it verbatim into
+  // the system prompt as "USER INSTRUCTIONS (global, from ~/.moon/MOON.md".
+  const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'moon-eval-home-canary-'));
+  t.after(() => fs.rmSync(fakeHome, { recursive: true, force: true }));
+  const CANARY = 'CANARY-EVAL-HOME-ISOLATION-9f2c';
+  fs.mkdirSync(path.join(fakeHome, '.moon'), { recursive: true });
+  fs.writeFileSync(path.join(fakeHome, '.moon', 'MOON.md'), `# canary\n${CANARY}\n`);
+
   const { taskDir, task } = makeInlineTask(rootDir);
+
+  // Negative-control marker: written into a workspace-adjacent .moon dir
+  // (i.e. under the task's fixture, which becomes the workspace root) —
+  // NOT under $HOME. Global memory is scoped strictly to
+  // $HOME/.moon/MOON.md, so this must never surface as global memory
+  // content even though it sits in a similarly-named .moon/MOON.md file.
+  const NEGATIVE_MARKER = 'NEGATIVE-CONTROL-NOT-HOME-8b31';
+  fs.mkdirSync(path.join(taskDir, 'fixture', '.moon'), { recursive: true });
+  fs.writeFileSync(path.join(taskDir, 'fixture', '.moon', 'MOON.md'), `# not global\n${NEGATIVE_MARKER}\n`);
+
   const attempt = await runAttempt({
     taskDir,
     task,
     variant: 'baseline',
     model: 'mock',
     settingsEnv: { apiKey: 'k', baseUrl: baseUrlOf(server) },
+    homeDir: fakeHome,
   });
 
-  // No error surfaced means loadMemory() (which reads os.homedir()/.moon)
-  // succeeded against the isolated fake HOME rather than crashing/leaking.
+  // No error surfaced means loadMemory() succeeded (didn't crash) against
+  // the isolated fake HOME.
   assert.ok(!attempt.events.some((e) => e.type === 'error'), 'no error events from memory loading under isolated HOME');
+
+  // The real assertion: the system prompt sent to the model must contain
+  // the canary marker, proving the forked worker resolved HOME to fakeHome
+  // (not the real user's HOME) and actually loaded ~/.moon/MOON.md from
+  // there. loadMemory() swallows errors, so without this the previous
+  // assertion above passes identically whether isolation works or not.
+  assert.ok(server.requests.length > 0, 'at least one request captured');
+  const sysPrompt = server.requests[0].messages.find((m) => m.role === 'system').content;
+  assert.ok(sysPrompt.includes(CANARY), 'system prompt contains the canary marker from the fake HOME MOON.md');
+
+  // Negative control: the workspace-adjacent .moon/MOON.md marker must NOT
+  // appear in the prompt — proves the canary hit is really coming from
+  // $HOME/.moon (fakeHome) and not from some other .moon/MOON.md the
+  // worker happens to stumble onto (e.g. relative to cwd/workspace).
+  assert.ok(!sysPrompt.includes(NEGATIVE_MARKER), 'workspace-adjacent .moon/MOON.md must not leak in as global memory');
 });
 
 test('timeout kill path: 1ms timeoutMs produces a failed attempt with notes "timeout"', async (t) => {

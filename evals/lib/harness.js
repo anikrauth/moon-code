@@ -49,10 +49,14 @@ function prepareWorkspace(taskDir) {
 // of eval runs — memoryStore resolves ~/.moon via os.homedir()) with piped
 // stdio (kills the TTY status line). Enforces task.timeoutMs as a
 // wall-clock kill via child.kill().
-function runAttempt({ taskDir, task, variant, model, settingsEnv }) {
+//
+// `homeDir` lets callers (e.g. tests) pre-create the fake HOME and seed it
+// with fixtures (a canary ~/.moon/MOON.md, say) before the worker forks;
+// if omitted, a fresh temp dir is created as before.
+function runAttempt({ taskDir, task, variant, model, settingsEnv, homeDir }) {
   return new Promise((resolve) => {
     const workspace = prepareWorkspace(taskDir);
-    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'moon-eval-home-'));
+    const fakeHome = homeDir || fs.mkdtempSync(path.join(os.tmpdir(), 'moon-eval-home-'));
 
     const settings = {
       apiKey: (settingsEnv && settingsEnv.apiKey) || 'dummy-key',
