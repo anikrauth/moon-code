@@ -20,7 +20,7 @@ export function registerAgentIpc({ configStore, mcpManager }: { configStore: any
     pendingQuestions.clear();
   };
 
-  ipcMain.on('agent:prompt', (event, prompt: string, workspace: string, profileId: string, history: any, meta?: { lastInputTokens?: number; skillContent?: string; sessionId?: string }) => {
+  ipcMain.on('agent:prompt', (event, prompt: string, workspace: string, profileId: string, history: any, meta?: { lastInputTokens?: number; skillContent?: string; sessionId?: string; mode?: 'plan' | 'execute' }) => {
     const settings = configStore.resolveSettings(profileId);
     if (!settings) {
       event.reply('agent:event', { type: 'error', agent: 'main', content: 'Selected model profile has no API key. Open Settings and configure one.' });
@@ -33,13 +33,18 @@ export function registerAgentIpc({ configStore, mcpManager }: { configStore: any
     flushPendingQuestions();
     activeTurn = new AbortController();
     const turnController = activeTurn;
-    const requestPermission = (name: string, args: any, agentId: string): Promise<boolean> => {
+    const requestPermission = (name: string, args: any, agentId: string, options?: { forcePrompt?: boolean }): Promise<boolean> => {
       if (turnController.signal.aborted) return Promise.resolve(false);
-      if (sessionAllowedTools.has(name)) return Promise.resolve(true);
+      // Plan mode's run_command gating passes forcePrompt to guarantee a
+      // fresh prompt every call: skip the always-allow cache lookup, and
+      // don't let an "always allow" answer given under forcePrompt grease
+      // the cache for later (execute-mode) calls — record it as allow-once.
+      const forcePrompt = !!options?.forcePrompt;
+      if (!forcePrompt && sessionAllowedTools.has(name)) return Promise.resolve(true);
       const id = `perm-${++permissionCounter}`;
       return new Promise((resolve) => {
         pendingPermissions.set(id, (allow, alwaysAllow) => {
-          if (allow && alwaysAllow) sessionAllowedTools.add(name);
+          if (allow && alwaysAllow && !forcePrompt) sessionAllowedTools.add(name);
           resolve(allow);
         });
         event.reply('agent:event', { type: 'permission_request', id, name, arguments: args, agent: agentId });

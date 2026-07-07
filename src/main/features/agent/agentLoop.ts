@@ -128,7 +128,7 @@ export async function handlePrompt(
     abortSignal?: AbortSignal,
     extraTools?: any,
     skillsText?: string,
-    usageHint?: { lastInputTokens?: number; skillContent?: string; promptVariant?: 'baseline' | 'v2'; sessionId?: string },
+    usageHint?: { lastInputTokens?: number; skillContent?: string; promptVariant?: 'baseline' | 'v2'; sessionId?: string; mode?: 'plan' | 'execute' },
     skillsCatalog?: { id: string; description: string; content: string }[],
     requestQuestion?: (question: string, options: { label: string; description?: string }[], agentId: string) => Promise<string>,
 ) {
@@ -172,11 +172,12 @@ export async function handlePrompt(
             onEvent(e);
         };
 
+        const mode = usageHint?.mode === 'plan' ? 'plan' : 'execute';
         const tools = makeTools({
             workspace, onEvent: wrappedOnEvent, requestPermission, requestQuestion, agentId: 'main',
             includeSpawn: true, settings,
             spawnState: { counter: 0, projectMemory, globalMemory, memoryCatalog, skillsText: skillsText ?? '', skillsCatalog: skillsCatalog ?? [] },
-            abortSignal, extraTools, limits, skillsCatalog: skillsCatalog ?? [],
+            abortSignal, extraTools, limits, skillsCatalog: skillsCatalog ?? [], mode,
         });
 
         let statusLine: any = null;

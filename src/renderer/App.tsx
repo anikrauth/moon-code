@@ -103,6 +103,11 @@ export default function App() {
   const [isTyping, setIsTyping] = useState(false);
   const [statusText, setStatusText] = useState<string | null>(null);
   const [config, setConfig] = useState<any>(null);
+  // Plan mode (Feature 15 Task 3): component state only, not persisted per
+  // session — matches the brief's MVP scope. Enforcement lives at the tool
+  // layer (toolRouter.ts); this just toggles what `mode` rides with each
+  // prompt in the usageHint meta bag.
+  const [planMode, setPlanMode] = useState(false);
 
   /* ---- Overlay-modal state (Skills/MCP/Settings/Usage) ---- */
   const [activeModal, setActiveModal] = useState<string | null>(null);
@@ -549,6 +554,7 @@ export default function App() {
       // too early (or too late) when the provider never reports usage.
       lastInputTokens: contextInfo && !contextInfo.estimated ? contextInfo.lastInputTokens : undefined,
       sessionId: currentSessionId ?? undefined,
+      mode: planMode ? 'plan' : undefined,
     });
   };
 
@@ -564,6 +570,7 @@ export default function App() {
     window.electron?.sendPrompt(msg.content, workspace, config.activeProfileId, history, {
       lastInputTokens: contextInfo && !contextInfo.estimated ? contextInfo.lastInputTokens : undefined,
       sessionId: currentSessionId ?? undefined,
+      mode: planMode ? 'plan' : undefined,
     });
   };
 
@@ -579,6 +586,7 @@ export default function App() {
       lastInputTokens: contextInfo && !contextInfo.estimated ? contextInfo.lastInputTokens : undefined,
       skillContent,
       sessionId: currentSessionId ?? undefined,
+      mode: planMode ? 'plan' : undefined,
     });
   };
 
@@ -965,6 +973,8 @@ export default function App() {
             profiles={config?.profiles ?? []}
             activeProfileId={config?.activeProfileId ?? null}
             onSelectProfile={(id) => window.electron?.setActiveProfile(id).then(setConfig)}
+            planMode={planMode}
+            onTogglePlanMode={() => setPlanMode((v) => !v)}
             busy={isTyping}
             onStop={() => window.electron?.cancelPrompt()}
             commands={slashCommands}

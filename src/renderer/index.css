@@ -377,6 +377,17 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
   cursor: not-allowed;
 }
 
+/* Plan mode toggle, active state */
+.ri-toolbar-btn-active {
+  background: var(--accent-color);
+  color: #000;
+}
+
+.ri-toolbar-btn-active:hover {
+  background: var(--accent-hover);
+  color: #000;
+}
+
 .ri-toolbar-btn-label {
   display: inline-flex;
   align-items: center;

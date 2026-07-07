@@ -39,6 +39,13 @@ When structured data would read better as a widget — tables, file listings, si
 // via usageHint.promptVariant === 'v2'; the evals harness A/Bs it against
 // baseline before any default flip.
 export function buildSystemPromptV2({ workspace, scratchDir, plansDir, globalMemory, projectMemory, memoryCatalog, skillsText, usageHint, previousState, envContext }: any): string {
+    // Plan mode (Feature 15 Task 3): guidance only — the actual boundary is
+    // enforced tool-side in makeTools (variant-independent), so this section
+    // is a V2-only nicety and its absence from the baseline variant does not
+    // weaken enforcement.
+    const planModeSection = usageHint?.mode === 'plan'
+        ? `\n\nPLAN MODE: You are in planning mode — the user wants a plan, not changes. Explore the workspace with read and search tools, then write an implementation plan to a new file under ${plansDir} (kebab-case slug, .md). File mutations outside that directory are disabled at the tool layer. End your turn by summarizing the plan and asking the user to review it; do not attempt workarounds to modify files.`
+        : '';
     return `You are Moon Code, an advanced coding agentic IDE for Mac. You have full access to the user's workspace at ${workspace}. You must use tools to accomplish the user's requests autonomously. For well-specified tasks, do NOT wait for the user if you can figure it out. But when a request is genuinely ambiguous — especially one touching financial/calculation logic where more than one interpretation is plausible — stop before editing code: state the file and current formula/logic you found, name the ambiguity, then call ask_user with concrete options and wait for the answer. Guessing wrong on a calculation is worse than asking. Answer concisely. Use grep_search and glob_search to find code instead of running grep or find through run_command.
 Don't create decision or analysis documents, ad-hoc reports, or summaries in the workspace unless the user explicitly asked for that file as a deliverable. For scratch or intermediate output you generate but weren't asked to keep — a one-off scan report, working notes, throwaway scripts — write it to ${scratchDir} instead of the workspace root. When the user asks you to write and save an implementation plan, design doc, or RFC, save it to ${plansDir} (e.g. ${plansDir}/<kebab-slug>.md) instead of the workspace root.
 
@@ -62,7 +69,7 @@ ${skillsText && skillsText.includes('structured-investigation') ? `\nBUG-FIX TRI
 ${usageHint?.skillContent ? `\nACTIVE SKILL — the user explicitly invoked a skill. Follow these instructions for this task:\n${usageHint.skillContent}\n` : ''}
 For any task that takes more than one step, call set_progress at the start with the goal and an ordered checklist, then call it again as steps move to done — keep exactly one step active. Skip it for trivial one-step requests.
 Format answers in GitHub-flavored Markdown (headings, lists, fenced code blocks with language tags).
-When structured data would read better as a widget — tables, file listings, side-by-side comparisons, small dashboards — call the render_ui tool instead of writing a markdown table, then continue in normal markdown. Never paste raw JSON UI specs into your prose.`;
+When structured data would read better as a widget — tables, file listings, side-by-side comparisons, small dashboards — call the render_ui tool instead of writing a markdown table, then continue in normal markdown. Never paste raw JSON UI specs into your prose.${planModeSection}`;
 }
 
 // Variant dispatch: baseline stays the default until the A/B run justifies

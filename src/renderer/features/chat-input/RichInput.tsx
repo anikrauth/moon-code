@@ -6,6 +6,7 @@ import {
   Puzzle,
   Paperclip,
   Globe,
+  Map,
 } from 'lucide-react';
 
 /* ------------------------------------------------------------------ */
@@ -33,6 +34,9 @@ interface RichInputProps {
   profiles: { id: string; name: string }[];
   activeProfileId: string | null;
   onSelectProfile: (id: string) => void;
+  /** Plan mode (Feature 15 Task 3): read-only planning, enforced tool-side. */
+  planMode?: boolean;
+  onTogglePlanMode?: () => void;
   busy?: boolean;
   onStop?: () => void;
   commands?: { name: string; description: string; run: (arg?: string) => void }[];
@@ -82,6 +86,8 @@ export default function RichInput({
   profiles,
   activeProfileId,
   onSelectProfile,
+  planMode = false,
+  onTogglePlanMode,
   busy = false,
   onStop,
   commands = [],
@@ -227,6 +233,20 @@ export default function RichInput({
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
             </select>
+          )}
+
+          {/* Plan mode toggle */}
+          {onTogglePlanMode && (
+            <button
+              className={`ri-toolbar-btn ${planMode ? 'ri-toolbar-btn-active' : ''}`}
+              onClick={onTogglePlanMode}
+              disabled={disabled}
+              aria-pressed={planMode}
+              title={planMode ? 'Plan mode on — file mutations are disabled outside .moon/plans/' : 'Turn on plan mode (read-only planning)'}
+            >
+              <Map size={16} />
+              <span className="ri-toolbar-btn-label">Plan</span>
+            </button>
           )}
 
           {/* Add skill */}

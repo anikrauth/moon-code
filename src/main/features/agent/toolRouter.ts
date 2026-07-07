@@ -51,36 +51,73 @@ export function truncateOutput(text, limit = TOOL_OUTPUT_CHAR_LIMIT) {
     return `${text.slice(0, head)}\n[... truncated ${removed} chars ...]\n${text.slice(-tail)}`;
 }
 
+// Realpath the deepest existing ancestor of `target` (the target itself may
+// not exist yet, e.g. write_file creating a new file) and reconstruct the
+// full realpath by re-appending the not-yet-existing suffix. Returns null
+// only in the pathological case where no ancestor (up to fs root) resolves.
+function realpathDeep(target) {
+    let probe = target;
+    let suffix = '';
+    for (;;) {
+        try {
+            const real = fs.realpathSync(probe);
+            return suffix ? path.join(real, suffix) : real;
+        } catch {
+            const parent = path.dirname(probe);
+            if (parent === probe) return null;
+            suffix = suffix ? path.join(path.basename(probe), suffix) : path.basename(probe);
+            probe = parent;
+        }
+    }
+}
+
 export function resolveInWorkspace(workspace, relPath) {
     const root = path.resolve(workspace);
     const abs = path.resolve(root, relPath);
     if (abs !== root && !abs.startsWith(root + path.sep)) return null;
     // Lexical check alone is not enough: a symlink inside the workspace can
-    // point anywhere on disk. Realpath the deepest existing ancestor (the
-    // target itself may not exist yet, e.g. write_file creating it) and
+    // point anywhere on disk. Realpath the deepest existing ancestor and
     // re-check containment against the realpath'd root — same defense as
     // realPathWithinWorkspace() in workspaceInit.ts, extended to not-yet-
     // existing paths.
     let realRoot;
     try { realRoot = fs.realpathSync(root); } catch { return null; }
-    let probe = abs;
-    let suffix = '';
-    for (;;) {
-        let real;
-        try { real = fs.realpathSync(probe); } catch {
-            const parent = path.dirname(probe);
-            if (parent === probe) return null;
-            suffix = suffix ? path.join(path.basename(probe), suffix) : path.basename(probe);
-            probe = parent;
-            continue;
-        }
-        const resolved = suffix ? path.join(real, suffix) : real;
-        if (resolved !== realRoot && !resolved.startsWith(realRoot + path.sep)) return null;
-        return abs;
-    }
+    const resolved = realpathDeep(abs);
+    if (resolved == null) return null;
+    if (resolved !== realRoot && !resolved.startsWith(realRoot + path.sep)) return null;
+    return abs;
 }
 
-export function makeTools({ workspace, onEvent, requestPermission, requestQuestion, agentId, includeSpawn, settings, spawnState, abortSignal, extraTools, limits, skillsCatalog }) {
+// Plan mode (Feature 15 Task 3): while active, write_file/edit_file may only
+// target this subdirectory — the tool-layer boundary that makes plan mode a
+// real guarantee rather than prompt guidance. `absPath` must already be a
+// resolveInWorkspace() result (validated against escaping the workspace);
+// this tightens containment to the plans subtree, with the same
+// realpath-follow defense against a symlink planted inside the workspace
+// that points elsewhere inside it (e.g. .moon/plans/link -> ../src).
+export function isUnderPlansDir(workspace, absPath) {
+    const root = path.resolve(workspace);
+    const lexicalPlansRoot = path.join(root, '.moon', 'plans');
+    let realPlansRoot;
+    try {
+        realPlansRoot = fs.realpathSync(lexicalPlansRoot);
+    } catch {
+        // .moon/plans doesn't exist yet (e.g. first write of the turn) —
+        // fall back to the real workspace root + the lexical suffix, since
+        // a path that doesn't exist can't be a symlink.
+        let realRoot;
+        try { realRoot = fs.realpathSync(root); } catch { return false; }
+        realPlansRoot = path.join(realRoot, '.moon', 'plans');
+    }
+    const resolved = realpathDeep(absPath);
+    if (resolved == null) return false;
+    return resolved === realPlansRoot || resolved.startsWith(realPlansRoot + path.sep);
+}
+
+const PLAN_MODE_WRITE_ERROR = 'Error: plan mode active — file mutations are disabled outside .moon/plans/. Write your plan there, or ask the user to approve execution.';
+
+export function makeTools({ workspace, onEvent, requestPermission, requestQuestion, agentId, includeSpawn, settings, spawnState, abortSignal, extraTools, limits, skillsCatalog, mode }) {
+    const planMode = mode === 'plan';
     const emit = (e) => onEvent({ agent: agentId, ...e });
     const denied = (name) => {
         const res = 'User denied permission for this action.';
@@ -96,7 +133,12 @@ export function makeTools({ workspace, onEvent, requestPermission, requestQuesti
             }),
             execute: async ({ command, timeoutSeconds }) => {
                 emit({ type: 'tool_call', name: 'run_command', arguments: JSON.stringify({ command, timeoutSeconds }) });
-                if (!await requestPermission('run_command', { command }, agentId)) return denied('run_command');
+                // Plan mode: run_command is still available for read-only
+                // inspection, but every call must prompt the user fresh —
+                // bypass the always-allow cache so a prior "always allow"
+                // (from execute mode, or from this same plan-mode turn)
+                // can't silently approve a command the user never saw.
+                if (!await requestPermission('run_command', { command }, agentId, { forcePrompt: planMode })) return denied('run_command');
                 const timeoutSec = timeoutSeconds ?? 60;
                 try {
                     const { stdout, stderr } = await execAsync(command, { cwd: workspace, timeout: timeoutSec * 1000, signal: abortSignal });
@@ -176,6 +218,10 @@ export function makeTools({ workspace, onEvent, requestPermission, requestQuesti
                     emit({ type: 'tool_result', name: 'write_file', result: errMsg });
                     return errMsg;
                 }
+                if (planMode && !isUnderPlansDir(workspace, absPath)) {
+                    emit({ type: 'tool_result', name: 'write_file', result: PLAN_MODE_WRITE_ERROR });
+                    return PLAN_MODE_WRITE_ERROR;
+                }
                 if (!await requestPermission('write_file', { filePath }, agentId)) return denied('write_file');
                 try {
                     let oldContent = null;
@@ -208,6 +254,10 @@ export function makeTools({ workspace, onEvent, requestPermission, requestQuesti
                     const errMsg = `Error: path escapes the workspace: ${filePath}`;
                     emit({ type: 'tool_result', name: 'edit_file', result: errMsg });
                     return errMsg;
+                }
+                if (planMode && !isUnderPlansDir(workspace, absPath)) {
+                    emit({ type: 'tool_result', name: 'edit_file', result: PLAN_MODE_WRITE_ERROR });
+                    return PLAN_MODE_WRITE_ERROR;
                 }
                 if (!await requestPermission('edit_file', { filePath, oldString, newString }, agentId)) return denied('edit_file');
                 try {
@@ -487,7 +537,11 @@ ${spawnState.projectMemory ? `\nPROJECT INSTRUCTIONS (from MOON.md in the worksp
 ${(spawnState.memoryCatalog?.length) ? `\nMEMORY (call read_memory to load a fact's detail):\n${spawnState.memoryCatalog.map((f) => `- ${f.name} [${f.scope}] — ${f.description}`).join('\n')}\n` : ''}
 ${spawnState.skillsText ? `\n${spawnState.skillsText}\n` : ''}`;
                 try {
-                    const subTools = makeTools({ workspace, onEvent, requestPermission, agentId: subId, includeSpawn: false, settings, spawnState, abortSignal, extraTools, limits, skillsCatalog: spawnState.skillsCatalog });
+                    // Mode MUST propagate to subagents: a subagent that can
+                    // write files outside .moon/plans/ while the main agent
+                    // is plan-gated would be an escape hatch for the whole
+                    // boundary.
+                    const subTools = makeTools({ workspace, onEvent, requestPermission, agentId: subId, includeSpawn: false, settings, spawnState, abortSignal, extraTools, limits, skillsCatalog: spawnState.skillsCatalog, mode });
                     const { text } = await runAgentLoop({
                         prompt: task, workspace, settings, history: [],
                         onEvent, requestPermission, agentId: subId,
