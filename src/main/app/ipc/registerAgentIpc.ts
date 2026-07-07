@@ -3,6 +3,28 @@ import { ipcMain } from 'electron';
 import { handlePrompt, forceCompact } from '../../features/agent';
 import { buildInvocableCatalog } from '../../features/skills/skillScanner';
 
+// Permission-decision core, factored out of requestPermission below so it
+// can be unit-tested directly (no ipcMain/renderer round trip needed) —
+// see test/permission-decision.test.js. Behavior is unchanged from the
+// inline logic this replaces; this is a pure extraction.
+//
+// isAlreadyAllowed: whether requestPermission may resolve(true) immediately
+// from the session cache without prompting the user. Plan mode's
+// run_command gating passes forcePrompt: true to guarantee a fresh prompt
+// every call, bypassing the always-allow cache lookup entirely.
+export function isAlreadyAllowed(name: string, sessionAllowedTools: Set<string>, forcePrompt: boolean): boolean {
+  return !forcePrompt && sessionAllowedTools.has(name);
+}
+
+// shouldCacheAllow: whether a user's answer should be written into the
+// always-allow cache. An "always allow" answer given while forcePrompt was
+// set must NOT be cached — it's recorded as allow-once instead, so a
+// plan-mode "always allow" can't silently grease the cache for later
+// (execute-mode) calls to the same tool.
+export function shouldCacheAllow(allow: boolean, alwaysAllow: boolean, forcePrompt: boolean): boolean {
+  return allow && alwaysAllow && !forcePrompt;
+}
+
 export function registerAgentIpc({ configStore, mcpManager }: { configStore: any; mcpManager: any }) {
   // Tools the user approved with "always allow" for the rest of this app session.
   const sessionAllowedTools = new Set<string>();
@@ -40,11 +62,11 @@ export function registerAgentIpc({ configStore, mcpManager }: { configStore: any
       // don't let an "always allow" answer given under forcePrompt grease
       // the cache for later (execute-mode) calls — record it as allow-once.
       const forcePrompt = !!options?.forcePrompt;
-      if (!forcePrompt && sessionAllowedTools.has(name)) return Promise.resolve(true);
+      if (isAlreadyAllowed(name, sessionAllowedTools, forcePrompt)) return Promise.resolve(true);
       const id = `perm-${++permissionCounter}`;
       return new Promise((resolve) => {
         pendingPermissions.set(id, (allow, alwaysAllow) => {
-          if (allow && alwaysAllow && !forcePrompt) sessionAllowedTools.add(name);
+          if (shouldCacheAllow(allow, alwaysAllow, forcePrompt)) sessionAllowedTools.add(name);
           resolve(allow);
         });
         event.reply('agent:event', { type: 'permission_request', id, name, arguments: args, agent: agentId });
