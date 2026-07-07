@@ -167,3 +167,35 @@ test('explicit mode: "execute" behaves identically to mode omitted', async (t) =
     { mode: 'execute' });
   assert.strictEqual(result, 'Successfully wrote to notes.txt');
 });
+
+// --- Security review regressions (Critical #1 and #2 from the plan-mode
+// review): end-to-end write_file-through-handlePrompt versions of the PoCs
+// also asserted at the primitive level in test/containment.test.js. ---
+
+test('PoC A (end-to-end): .moon/plans symlinked to src blocks write_file instead of silently writing into src', async (t) => {
+  const ws = mkWorkspace(t);
+  fs.mkdirSync(path.join(ws, 'src'));
+  fs.mkdirSync(path.join(ws, '.moon'));
+  fs.symlinkSync(path.join(ws, 'src'), path.join(ws, '.moon', 'plans'), 'dir');
+
+  const { result } = await runTool(t, ws,
+    { name: 'write_file', args: { filePath: '.moon/plans/x.md', content: 'evil' } },
+    { mode: 'plan' });
+  assert.strictEqual(result, PLAN_MODE_ERROR);
+  assert.ok(!fs.existsSync(path.join(ws, 'src', 'x.md')), 'write must not land in src via the .moon/plans symlink');
+});
+
+test('PoC B (end-to-end): dangling symlink under .moon/plans blocks write_file instead of writing outside the workspace', async (t) => {
+  const ws = mkWorkspace(t);
+  fs.mkdirSync(path.join(ws, '.moon', 'plans'), { recursive: true });
+  const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moon-poc-outside-'));
+  t.after(() => fs.rmSync(outsideDir, { recursive: true, force: true }));
+  const outsideTarget = path.join(outsideDir, 'evil.md');
+  fs.symlinkSync(outsideTarget, path.join(ws, '.moon', 'plans', 'sneaky.md'));
+
+  const { result } = await runTool(t, ws,
+    { name: 'write_file', args: { filePath: '.moon/plans/sneaky.md', content: 'evil' } },
+    { mode: 'plan' });
+  assert.match(result, /^Error: /);
+  assert.ok(!fs.existsSync(outsideTarget), 'nothing should have been created outside the workspace via the dangling symlink');
+});
