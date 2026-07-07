@@ -89,28 +89,36 @@ export function makeTools({ workspace, onEvent, requestPermission, requestQuesti
     };
     const tools: any = {
         run_command: tool({
-            description: 'Execute a bash command in the current workspace.',
+            description: 'Execute a bash command in the current workspace. Prefer grep_search/glob_search over shell grep/find. Never run destructive commands (rm -rf, git reset --hard, force-push) without user confirmation via ask_user. Supports timeoutSeconds (default 60, max 600).',
             inputSchema: z.object({
                 command: z.string().describe('The command line string to execute.'),
+                timeoutSeconds: z.number().int().min(1).max(600).nullable().optional().describe('Maximum seconds to let the command run before it is killed. Default 60, max 600.'),
             }),
-            execute: async ({ command }) => {
-                emit({ type: 'tool_call', name: 'run_command', arguments: JSON.stringify({ command }) });
+            execute: async ({ command, timeoutSeconds }) => {
+                emit({ type: 'tool_call', name: 'run_command', arguments: JSON.stringify({ command, timeoutSeconds }) });
                 if (!await requestPermission('run_command', { command }, agentId)) return denied('run_command');
+                const timeoutSec = timeoutSeconds ?? 60;
                 try {
-                    const { stdout, stderr } = await execAsync(command, { cwd: workspace, timeout: 60000, signal: abortSignal });
+                    const { stdout, stderr } = await execAsync(command, { cwd: workspace, timeout: timeoutSec * 1000, signal: abortSignal });
                     const output = stdout + (stderr ? `\n[stderr]\n${stderr}` : '');
                     const finalOut = output.trim() ? truncateOutput(output) : 'Command executed successfully (no output).';
                     emit({ type: 'tool_result', name: 'run_command', result: finalOut });
                     return finalOut;
                 } catch (e: any) {
-                    const errMsg = truncateOutput(`Error: ${e.message}`);
+                    // exec's timeout kills the child (killed=true, signal set);
+                    // a user abort surfaces as AbortError instead, so
+                    // `killed && !aborted` isolates the timeout case.
+                    const timedOut = e.killed && !abortSignal?.aborted;
+                    const errMsg = timedOut
+                        ? `Error: command timed out after ${timeoutSec}s. If it legitimately needs longer, retry with a larger timeoutSeconds (max 600).`
+                        : truncateOutput(`Error: ${e.message}`);
                     emit({ type: 'tool_result', name: 'run_command', result: errMsg });
                     return errMsg;
                 }
             }
         }),
         read_file: tool({
-            description: 'Read the contents of a file.',
+            description: 'Read the contents of a file. Read a file before editing it; edits must be based on current file contents, not memory.',
             inputSchema: z.object({
                 filePath: z.string().describe('Path to the file, relative to workspace.'),
                 offset: z.number().int().min(1).nullable().optional().describe('1-based line number to start reading from. Default 1.'),
@@ -155,7 +163,7 @@ export function makeTools({ workspace, onEvent, requestPermission, requestQuesti
             }
         }),
         write_file: tool({
-            description: 'Create a new file with the given content (creates parent directories). For modifying an existing file, use edit_file instead.',
+            description: 'Create a new file with the given content (creates parent directories). For modifying an existing file, use edit_file instead. Overwrites the target if it exists — read it first unless you created it this turn. Do not create documentation/summary files the user did not ask for.',
             inputSchema: z.object({
                 filePath: z.string().describe('Path to the file, relative to workspace.'),
                 content: z.string().describe('The full content to write into the file.'),
@@ -187,7 +195,7 @@ export function makeTools({ workspace, onEvent, requestPermission, requestQuesti
             }
         }),
         edit_file: tool({
-            description: 'Edit an existing file by replacing an exact string match. oldString must appear exactly once in the file — include enough surrounding lines to make it unique.',
+            description: 'Edit an existing file by replacing an exact string match. oldString must be copied exactly from a read_file result in this conversation and must occur exactly once in the file — include enough surrounding lines to make it unique.',
             inputSchema: z.object({
                 filePath: z.string().describe('Path to the file, relative to workspace.'),
                 oldString: z.string().describe('Exact existing text to replace, including whitespace and indentation.'),
@@ -229,7 +237,7 @@ export function makeTools({ workspace, onEvent, requestPermission, requestQuesti
             }
         }),
         list_dir: tool({
-            description: 'List files and directories in a path.',
+            description: 'List files and directories in a path. For finding files by name/pattern across the tree, prefer glob_search.',
             inputSchema: z.object({
                 dirPath: z.string().describe('Path to the directory, relative to workspace. Use "." for root.'),
             }),
