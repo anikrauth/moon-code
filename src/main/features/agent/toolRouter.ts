@@ -54,7 +54,24 @@ export function truncateOutput(text, limit = TOOL_OUTPUT_CHAR_LIMIT) {
 // Realpath the deepest existing ancestor of `target` (the target itself may
 // not exist yet, e.g. write_file creating a new file) and reconstruct the
 // full realpath by re-appending the not-yet-existing suffix. Returns null
-// only in the pathological case where no ancestor (up to fs root) resolves.
+// only in the pathological case where no ancestor (up to fs root) resolves,
+// or when `probe` exists as a dangling symlink (see below).
+//
+// Security note (Feature 15 Task 3 review, Critical #2): fs.realpathSync
+// throws ENOENT for two very different situations that must NOT be treated
+// the same way:
+//   1. `probe` genuinely doesn't exist yet (e.g. a not-yet-created file/dir
+//      under an existing parent) — safe to fall back to the lexical
+//      string-join below, since there's nothing on disk to be tricked by.
+//   2. `probe` exists on disk as a symlink whose target doesn't resolve (a
+//      "dangling" symlink) — realpathSync still throws ENOENT here, but the
+//      path is NOT absent: fs.writeFileSync/readFileSync et al. will follow
+//      that symlink at I/O time. Falling through to the string-join branch
+//      would reconstruct a path as if it were a plain not-yet-existing file
+//      under the last-resolved ancestor, silently blessing a write that
+//      actually lands wherever the dangling symlink points — including
+//      outside the workspace entirely.
+// fs.lstatSync distinguishes the two without following the final symlink.
 function realpathDeep(target) {
     let probe = target;
     let suffix = '';
@@ -63,6 +80,9 @@ function realpathDeep(target) {
             const real = fs.realpathSync(probe);
             return suffix ? path.join(real, suffix) : real;
         } catch {
+            try {
+                if (fs.lstatSync(probe).isSymbolicLink()) return null; // dangling symlink — reject, do not string-join
+            } catch { /* lstat also threw ENOENT -> genuinely absent, fall through */ }
             const parent = path.dirname(probe);
             if (parent === probe) return null;
             suffix = suffix ? path.join(path.basename(probe), suffix) : path.basename(probe);
@@ -97,18 +117,29 @@ export function resolveInWorkspace(workspace, relPath) {
 // that points elsewhere inside it (e.g. .moon/plans/link -> ../src).
 export function isUnderPlansDir(workspace, absPath) {
     const root = path.resolve(workspace);
-    const lexicalPlansRoot = path.join(root, '.moon', 'plans');
-    let realPlansRoot;
-    try {
-        realPlansRoot = fs.realpathSync(lexicalPlansRoot);
-    } catch {
-        // .moon/plans doesn't exist yet (e.g. first write of the turn) —
-        // fall back to the real workspace root + the lexical suffix, since
-        // a path that doesn't exist can't be a symlink.
-        let realRoot;
-        try { realRoot = fs.realpathSync(root); } catch { return false; }
-        realPlansRoot = path.join(realRoot, '.moon', 'plans');
+    let realRoot;
+    try { realRoot = fs.realpathSync(root); } catch { return false; }
+    // Security note (Feature 15 Task 3 review, Critical #1): anchor the
+    // plans root to the already-verified REAL workspace root via a lexical
+    // join — never by realpath-ing the plans path itself. A repo can ship
+    // `.moon/plans` as a tracked mode-120000 symlink (e.g. `.moon/plans ->
+    // src`); fs.realpathSync(lexicalPlansRoot) would follow that symlink AT
+    // the `.moon/plans` component and silently redirect every "under plans"
+    // check into the symlink target, defeating the whole plan-mode boundary.
+    const realPlansRoot = path.join(realRoot, '.moon', 'plans');
+    // A legitimate plans dir is a real directory, not a symlink — reject
+    // outright (belt-and-suspenders on top of the lexical anchor above) if
+    // `.moon` or `.moon/plans` itself exists as a symlink. Doesn't-exist-yet
+    // is fine (e.g. first plan-mode write of the turn creates it via the
+    // write tool's own mkdir(recursive:true), after this check passes).
+    for (const p of [path.join(root, '.moon'), path.join(root, '.moon', 'plans')]) {
+        try {
+            if (fs.lstatSync(p).isSymbolicLink()) return false;
+        } catch { /* doesn't exist yet — fine */ }
     }
+    // realpathDeep also defends against a symlink planted *inside* the plans
+    // dir that points elsewhere within the workspace (e.g.
+    // .moon/plans/link -> ../src) — resolved won't start with realPlansRoot.
     const resolved = realpathDeep(absPath);
     if (resolved == null) return false;
     return resolved === realPlansRoot || resolved.startsWith(realPlansRoot + path.sep);
