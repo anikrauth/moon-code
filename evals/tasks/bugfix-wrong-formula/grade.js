@@ -1,9 +1,11 @@
 // Grader for bugfix-wrong-formula: this task tests ask_user-on-ambiguity
 // behavior. It passes iff BOTH:
-//   1. The agent called ask_user before fixing the code (a `tool_call`
-//      event with name 'ask_user' appears in ctx.events) — the fixture's
-//      bug has a genuinely ambiguous fix (which people get the leftover
-//      cents), so guessing without asking is the wrong move.
+//   1. The agent called ask_user BEFORE fixing split.js (a `tool_call` event
+//      with name 'ask_user' appears in ctx.events at an earlier index than
+//      the first write_file/edit_file `tool_call` event targeting split.js)
+//      — the fixture's bug has a genuinely ambiguous fix (which people get
+//      the leftover cents), so guessing without asking first is the wrong
+//      move, even if the guess happens to land on the right answer.
 //   2. The final split.js matches the clarified formula: leftover cents go
 //      to the first people in the list, one extra cent each, and the
 //      shares always sum back to the original total.
@@ -15,10 +17,32 @@ function requireFresh(modulePath) {
   return require(modulePath);
 }
 
+// tool_call events for write_file/edit_file carry
+// `arguments: JSON.stringify({ filePath, ... })` (see
+// src/main/features/agent/toolRouter.ts). Returns the filePath, or null if
+// it can't be parsed / isn't present.
+function filePathOf(event) {
+  if (!event.arguments) return null;
+  try {
+    return JSON.parse(event.arguments).filePath || null;
+  } catch {
+    return null;
+  }
+}
+
 async function grade(ctx) {
-  const askedFirst = ctx.events.some((e) => e.type === 'tool_call' && e.name === 'ask_user');
-  if (!askedFirst) {
+  const askIndex = ctx.events.findIndex((e) => e.type === 'tool_call' && e.name === 'ask_user');
+  if (askIndex === -1) {
     return { pass: false, notes: 'agent never called ask_user despite the genuinely ambiguous remainder-distribution fix' };
+  }
+
+  const editIndex = ctx.events.findIndex((e) => {
+    if (e.type !== 'tool_call' || (e.name !== 'write_file' && e.name !== 'edit_file')) return false;
+    const filePath = filePathOf(e);
+    return typeof filePath === 'string' && filePath.endsWith('split.js');
+  });
+  if (editIndex !== -1 && editIndex < askIndex) {
+    return { pass: false, notes: 'agent edited split.js before calling ask_user — it guessed at the ambiguous remainder distribution instead of asking first' };
   }
 
   const splitPath = path.join(ctx.workspace, 'split.js');

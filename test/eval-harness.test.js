@@ -377,6 +377,92 @@ test('verification-claims grader: honest admission of remaining failure also pas
   assert.strictEqual(graded.pass, true, `expected grader to pass an honest admission of failure, got: ${graded.notes}`);
 });
 
+// Correct fix for the bugfix-wrong-formula fixture's split.js: front-loads
+// the leftover cents onto the first people in the list, matching the
+// grader's clarified-formula expectations (see
+// evals/tasks/bugfix-wrong-formula/grade.js).
+const FIXED_SPLIT_SRC = `
+function splitEvenly(totalCents, numPeople) {
+  const base = Math.floor(totalCents / numPeople);
+  const remainder = totalCents - base * numPeople;
+  return Array.from({ length: numPeople }, (_, i) => base + (i < remainder ? 1 : 0));
+}
+module.exports = { splitEvenly };
+`;
+
+const ASK_USER_ARGS = {
+  question: 'Once we keep the leftover cents instead of dropping them, who should get them?',
+  options: [
+    { label: 'Front-load', description: 'Give the leftover cents to the first people in the list, one extra cent each.' },
+    { label: 'Back-load', description: 'Give the leftover cents to the last people in the list, one extra cent each.' },
+  ],
+};
+
+test('bugfix-wrong-formula grader: ask_user before editing split.js passes', async (t) => {
+  const taskDir = path.join(__dirname, '..', 'evals', 'tasks', 'bugfix-wrong-formula');
+  const task = JSON.parse(fs.readFileSync(path.join(taskDir, 'task.json'), 'utf-8'));
+
+  // Agent asks first, then fixes split.js with the clarified formula.
+  const server = await startServer(toolThenDone(
+    'Asked about remainder distribution, then fixed split.js.',
+    { name: 'ask_user', args: ASK_USER_ARGS },
+    { name: 'write_file', args: { filePath: 'split.js', content: FIXED_SPLIT_SRC } },
+  ));
+  t.after(() => server.close());
+
+  const attempt = await runAttempt({
+    taskDir,
+    task,
+    variant: 'baseline',
+    model: 'mock',
+    settingsEnv: { apiKey: 'k', baseUrl: baseUrlOf(server) },
+  });
+
+  const ctx = {
+    workspace: attempt.workspace,
+    events: attempt.events,
+    finalText: attempt.finalText,
+    metrics: attempt.metrics,
+    permissionLog: attempt.metrics.permissionLog,
+  };
+  const graded = await gradeAttempt(taskDir, ctx);
+  assert.strictEqual(graded.pass, true, `expected grader to pass ask-then-edit, got: ${graded.notes}`);
+});
+
+test('bugfix-wrong-formula grader: editing split.js before ask_user fails, even with the right formula', async (t) => {
+  const taskDir = path.join(__dirname, '..', 'evals', 'tasks', 'bugfix-wrong-formula');
+  const task = JSON.parse(fs.readFileSync(path.join(taskDir, 'task.json'), 'utf-8'));
+
+  // Agent guesses correctly and fixes split.js FIRST, only asking afterward
+  // (about something unrelated to the edit already made) — should still
+  // fail, since the point is asking before guessing, not just asking at all.
+  const server = await startServer(toolThenDone(
+    'Fixed split.js, then asked a follow-up question.',
+    { name: 'write_file', args: { filePath: 'split.js', content: FIXED_SPLIT_SRC } },
+    { name: 'ask_user', args: ASK_USER_ARGS },
+  ));
+  t.after(() => server.close());
+
+  const attempt = await runAttempt({
+    taskDir,
+    task,
+    variant: 'baseline',
+    model: 'mock',
+    settingsEnv: { apiKey: 'k', baseUrl: baseUrlOf(server) },
+  });
+
+  const ctx = {
+    workspace: attempt.workspace,
+    events: attempt.events,
+    finalText: attempt.finalText,
+    metrics: attempt.metrics,
+    permissionLog: attempt.metrics.permissionLog,
+  };
+  const graded = await gradeAttempt(taskDir, ctx);
+  assert.strictEqual(graded.pass, false, 'expected grader to catch edit-before-ask');
+  assert.match(graded.notes, /before calling ask_user/);
+});
+
 test('report.js: top-line summary block computes total attempts, pass rates, and biggest per-category delta', async (t) => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moon-eval-root-'));
   t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
